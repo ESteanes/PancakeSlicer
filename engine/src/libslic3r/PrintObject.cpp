@@ -3054,9 +3054,12 @@ PrintObject::detect_nonplanar_surfaces()
                         }
 
                         if (topNonplanar.size() > 0) {
+                            BoundingBox claim;
+                            for (const Surface &piece : topNonplanar.surfaces)
+                                claim.merge(get_extents(piece.expolygon));
                             Polygons owned;
                             for (const Surface &s : layerm_slices_surfaces)
-                                if (s.is_nonplanar())
+                                if (s.is_nonplanar() && claim.overlap(get_extents(s.expolygon)))
                                     polygons_append(owned, to_polygons(s.expolygon));
                             if (! owned.empty()) {
                                 owned = union_(owned);
