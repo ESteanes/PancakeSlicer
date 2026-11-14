@@ -2996,15 +2996,23 @@ PrintObject::detect_nonplanar_surfaces()
                             Layer* upper_layer = layer->upper_layer;
                             LayerRegion &upper_layerm = *upper_layer->m_regions[region_id];
                             Surfaces upper_surfaces = upper_layerm.slices.surfaces;
+                            ExPolygons exposed = intersection_ex(
+                                projection,
+                                union_ex(
+                                    diff_ex(
+                                        layerm_slices_surfaces,
+                                        upper_surfaces,
+                                        ApplySafetyOffset::No)),
+                                ApplySafetyOffset::No);
+                            // Another region above (a second part or painted colour) covers this one: it is no top there.
+                            Polygons other_regions;
+                            for (size_t other = 0; other < upper_layer->region_slices_before_nonplanar.size(); ++other)
+                                if (other != region_id)
+                                    polygons_append(other_regions, to_polygons(upper_layer->region_slices_before_nonplanar[other]));
+                            if (!exposed.empty() && !other_regions.empty())
+                                exposed = diff_ex(exposed, other_regions, ApplySafetyOffset::No);
                             topNonplanar.append(
-                                intersection_ex(
-                                    projection,
-                                    union_ex(
-                                        diff_ex(
-                                            layerm_slices_surfaces,
-                                            upper_surfaces,
-                                            ApplySafetyOffset::No)),
-                                    ApplySafetyOffset::No),
+                                std::move(exposed),
                                 (shell_thickness == 0 ? stTopNonplanar : stInternalSolidNonplanar),
                                 distance_to_top
                             );
