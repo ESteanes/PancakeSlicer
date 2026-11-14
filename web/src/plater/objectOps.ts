@@ -4,6 +4,7 @@ import { getState, newId, printerPreset, setState, toast, updateVolume, type Pla
 import { undoable } from '../state/history';
 import { centred, instanceBox, instanceMatrix, loadMesh, request, volumeBox, volumeWorld } from './geometry';
 import objectKeys from '../object_options.json';
+import { pickFiles } from '../file-picker';
 
 const replace = (name: string, objects: PlateObject[], selected?: { object: number; instance: number }) =>
   undoable(name, () => setState({ objects, ...(selected ? { selected } : {}) }));
@@ -83,12 +84,8 @@ function stl(g: THREE.BufferGeometry): Blob {
 }
 
 export function replaceFile(id: number) {
-  const input = document.createElement('input');
-  input.type = 'file';
-  input.accept = '.stl,.obj';
-  input.onchange = async () => {
-    const file = input.files?.[0];
-    if (!file) return;
+  pickFiles('.stl,.obj', async (files) => {
+    const file = files[0];
     try {
       const geometry = await loadMesh(file);
       const s = getState();
@@ -96,8 +93,7 @@ export function replaceFile(id: number) {
     } catch (e) {
       toast('objectops_failed', { detail: e instanceof Error ? e.message : String(e) });
     }
-  };
-  input.click();
+  });
 }
 
 export function mirrorVolume(objectId: number, volumeId: number, axis: 0 | 1 | 2) {

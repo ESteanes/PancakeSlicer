@@ -33,6 +33,7 @@ import { loadPreviewView } from './components/preview-loader';
 import { slotFilaments } from './profiles/slots';
 import { DEMO } from './demo/config';
 import { recordWarnings } from './engine-warnings';
+import { pickFiles } from './file-picker';
 
 export async function init() {
   app.send({ type: 'BOOT' });
@@ -260,22 +261,13 @@ async function replacePlate(title: string, question: string): Promise<(() => voi
 }
 
 export function openProjectDialog() {
-  const input = document.createElement('input');
-  input.type = 'file';
-  input.accept = '.3mf,.3MF';
-  input.onchange = () => input.files?.[0] && void openProject(input.files[0]);
-  input.click();
+  pickFiles('.3mf,.3MF', (files) => openProject(files[0]));
 }
 
 export function openFileDialog() { pickModelFiles(importFiles); }
 
 export function pickModelFiles(onFiles: (files: FileList) => unknown) {
-  const input = document.createElement('input');
-  input.type = 'file';
-  input.multiple = true;
-  input.accept = ['stl', 'obj', '3mf', 'step', 'stp'].flatMap((e) => [`.${e}`, `.${e.toUpperCase()}`]).join(',');
-  input.onchange = () => input.files && void onFiles(input.files);
-  input.click();
+  pickFiles(['stl', 'obj', '3mf', 'step', 'stp'].flatMap((e) => [`.${e}`, `.${e.toUpperCase()}`]).join(','), onFiles, true);
 }
 
 export function arrangeAll(allPlates = true) {

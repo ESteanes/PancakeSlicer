@@ -8,6 +8,7 @@ import { Dropdown } from './Dropdown';
 import { Modal, ModalBody, ModalFooter, ModalTitle } from './Modal';
 import { createMachine, useMachine } from '../flow/fsm';
 import { notice, noticeText, type NoticeKind } from '../notice-codes';
+import { fileAccept } from '../file-picker';
 
 const TYPE_NAME: Record<PresetType, string> = { machine: 'Printer', filament: 'Filament', process: 'Process' };
 const ACCEPT = '.json,.zip,.bbscfg,.orca_printer,.orca_filament,.orca_bundle';
@@ -85,7 +86,7 @@ export function ImportDialog() {
           onDrop={(e) => { e.preventDefault(); e.stopPropagation(); setDrag(false); void read(e.dataTransfer.files); }}>
           <span>Drop .json, .zip or .orca_* files here</span>
           <button type="button" className="btn" onClick={() => input.current?.click()} disabled={busy}>Choose files…</button>
-          <input ref={input} type="file" multiple hidden accept={ACCEPT} aria-label="Profile files" onChange={(e) => { if (e.target.files) void read(e.target.files); e.target.value = ''; }} />
+          <input ref={input} type="file" multiple hidden accept={fileAccept(ACCEPT)} aria-label="Profile files" onChange={(e) => { if (e.target.files) void read(e.target.files); e.target.value = ''; }} />
         </div>
         {busy && <div role="status">{value === 'importing' ? 'Importing…' : 'Reading…'}</div>}
         {error && <p className="modal-error" role="alert">{error}</p>}
