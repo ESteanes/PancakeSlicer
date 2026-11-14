@@ -462,18 +462,7 @@ void main() {
       }
     };
     const drawScene = renderer.render.bind(renderer);
-    let captureSize: { width: number; height: number; ratio: number } | null = null;
     renderer.render = (target, camera) => {
-      if (target === scene) {
-        if (camera === views.camera && captureSize) {
-          renderer.setDrawingBufferSize(captureSize.width, captureSize.height, captureSize.ratio);
-          captureSize = null;
-        } else if (camera !== views.camera && !captureSize) {
-          const size = renderer.getSize(new THREE.Vector2());
-          captureSize = { width: size.x, height: size.y, ratio: renderer.getPixelRatio() };
-          renderer.setDrawingBufferSize(320, Math.max(1, Math.round(320 * size.y / size.x)), 1);
-        }
-      }
       const reduced: [THREE.Mesh, THREE.BufferGeometry][] = [];
       if (target === scene) {
         lights(camera);
