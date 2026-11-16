@@ -22,18 +22,20 @@ import (
 )
 
 type workspaceStore struct {
-	mu     sync.Mutex
-	root   string
-	cached *workspaceData
-	stamp  [2]int64
-	views  map[string]any
-	leases map[string]*projectLease
+	mu          sync.Mutex
+	root        string
+	cached      *workspaceData
+	stamp       [2]int64
+	views       map[string]any
+	leases      map[string]*projectLease
+	objectLocks map[string]map[string]*editLock
 }
 type workspaceProject struct {
-	Record   json.RawMessage `json:"record"`
-	Archived bool            `json:"archived,omitempty"`
-	Revision uint64          `json:"revision"`
-	Folder   string          `json:"folder,omitempty"`
+	Record        json.RawMessage `json:"record"`
+	Collaborative bool            `json:"collaborative,omitempty"`
+	Archived      bool            `json:"archived,omitempty"`
+	Revision      uint64          `json:"revision"`
+	Folder        string          `json:"folder,omitempty"`
 }
 type workspaceDraft struct {
 	ID        string          `json:"id"`
@@ -230,6 +232,8 @@ func encodeVerbatim[V any](b *bytes.Buffer, m map[string]V, marker string, split
 			b.Write(entry[:at])
 			b.Write(raw)
 			b.Write(entry[at+len("null"):])
+		} else if raw != nil {
+			return fmt.Errorf("Workspace record marker %s is missing.", marker)
 		} else {
 			b.Write(entry)
 		}
@@ -417,6 +421,7 @@ func projectMeta(p workspaceProject) json.RawMessage {
 	return raw
 }
 func (st *workspaceStore) register(mux *http.ServeMux) {
+	st.collaborationRoutes(mux)
 	st.leaseRoutes(mux)
 	st.folderRoutes(mux)
 	st.thumbnailRoutes(mux)
@@ -600,6 +605,13 @@ func (st *workspaceStore) projectWrite(w http.ResponseWriter, r *http.Request, a
 			return
 		}
 		p, exists := d.Projects[id]
+		if p.Collaborative && action == "save" {
+			workspaceFailure(w, 409, "collaboration_required", "This project uses shared editing. Reload the app before saving.", "reload", p.Revision)
+			return
+		}
+		if p.Collaborative && action != "duplicate" && !st.authorizeProjectCommand(w, r, id, p, action) {
+			return
+		}
 		if action != "duplicate" && st.leaseConflict(w, id, r.Header.Get(sessionHeader), p.Revision) {
 			return
 		}
@@ -621,6 +633,9 @@ func (st *workspaceStore) projectWrite(w http.ResponseWriter, r *http.Request, a
 			return
 		}
 		next := p
+		if action == "save" && r.Header.Get("X-Orca-Collaboration") == "1" {
+			next.Collaborative = true
+		}
 		next.Revision++
 		var err error
 		switch action {
@@ -635,6 +650,11 @@ func (st *workspaceStore) projectWrite(w http.ResponseWriter, r *http.Request, a
 			var meta map[string]json.RawMessage
 			json.Unmarshal(record["meta"], &meta)
 			meta["name"], _ = json.Marshal(in.Name)
+			var doc map[string]json.RawMessage
+			if json.Unmarshal(record["doc"], &doc) == nil && doc != nil {
+				doc["projectName"], _ = json.Marshal(in.Name)
+				record["doc"], _ = json.Marshal(doc)
+			}
 			meta["savedAt"], _ = json.Marshal(time.Now().UnixMilli())
 			record["meta"], _ = json.Marshal(meta)
 			raw, _ := json.Marshal(record)
@@ -672,7 +692,7 @@ func (st *workspaceStore) projectWrite(w http.ResponseWriter, r *http.Request, a
 		if !st.commit(w, d, in.OperationID, digest, response) {
 			return
 		}
-		if action == "save" {
+		if action == "save" && !next.Collaborative {
 			st.claimLease(id, r.Header.Get(sessionHeader))
 		}
 		switch action {

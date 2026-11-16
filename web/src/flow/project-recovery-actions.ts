@@ -97,7 +97,9 @@ export async function keepProjectVersion(runtime: RecoveryRuntime) {
     const rec = await runtime.storage()?.load(id);
     if (id !== project.get().context.id || gen !== documentGeneration()) return;
     if (!rec || runtime.removed.has(id)) throw failureError(projectFailure({ name: 'ProjectDeletedError', message: 'Oops! We couldn\'t find the saved project on the server, but you can save your local draft as a new copy.' }, id, project.get().context.revision));
-    project.send({ type: 'REBASE', revision: rec.meta.revision ?? 0 });
+    const meta = (await import('../persist/project-collaboration')).collaborative()
+      ? await (await import('./collaboration')).prepareSharedReplacement() : rec.meta;
+    project.send({ type: 'REBASE', revision: meta.revision ?? 0 });
     runtime.resetCaptured();
     await flushProject();
   } catch (error) {
@@ -346,8 +348,11 @@ export async function saveProjectSnapshot(runtime: RecoveryRuntime, capture: {
     const meta = { name: nameOf(document), savedAt: Date.now(), objects: plateCount(document), revision, change: changeForSave(id, document, revision) };
     const committed: CheckpointDocument = { ...stored, recoveryCheckpoint: receipt.checkpoint };
     const acknowledgement = await storage.save(id, meta, committed, meta.objects === 0 ? null : runtime.activeWrite(id, gen, version) ? thumbnail() ?? undefined : undefined);
+    if (acknowledgement.record && runtime.activeWrite(id, gen, version))
+      await (await import('./collaboration')).acceptSharedRecord(acknowledgement.record, document);
     savedVersionBase(id, document);
-    if (runtime.activeWrite(id, gen, version)) project.send({ type: 'SAVED', id, ...meta, ...acknowledgement, checkpoint: receipt.checkpoint });
+    if (runtime.activeWrite(id, gen, version)) project.send({ type: 'SAVED', id, ...meta, ...acknowledgement,
+      ...(acknowledgement.record ? { name: acknowledgement.record.meta.name, objects: acknowledgement.record.meta.objects } : {}), checkpoint: receipt.checkpoint });
     if (!runtime.activeWrite(id, gen, version) || project.get().value !== 'conflict') {
       await receipt.durable.catch(() => null);
       const drafts = await runtime.drafts().catch(() => null);

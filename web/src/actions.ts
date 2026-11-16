@@ -34,6 +34,8 @@ import { capturePrinterMaterials, selectionNotice } from './profiles/material-li
 import { preferredHeight } from './profiles/context';
 import { loadPreviewView } from './components/preview-loader';
 import { SEP } from './separator';
+import { collaborative } from './persist/project-collaboration';
+import { adoptEdit } from './state/edit-guard';
 
 export async function init() {
   app.send({ type: 'BOOT' });
@@ -183,7 +185,7 @@ export async function importFiles(files: FileList | File[], opts: { sourceUrl?: 
   const simplified = added.flatMap((o) => o.simplification ? [o.simplification] : []);
   if (simplified.length) void import('./simplify/ui').then((m) => m.noteSimplified(simplified));
   undoable(added.length > 1 ? 'Add objects' : 'Add object', () => setState((s) => {
-    const objects = project ? added.reduce((list, o) => {
+    const objects = project || collaborative() ? added.reduce((list, o) => {
       const spot = nextFreeSpot(list, o, bedArea()) ?? bedBounds(bedArea()).center;
       return [...list, { ...o, instances: [{ ...o.instances[0], x: spot.x, y: spot.y }] }];
     }, s.objects) : arrange([...s.objects, ...added], bedArea());
@@ -191,7 +193,9 @@ export async function importFiles(files: FileList | File[], opts: { sourceUrl?: 
     return { objects, selected: { object: last.id, instance: last.instances[0].id, allInstances: true }, job: s.job.state === 'done' ? { ...s.job, stale: true } : s.job };
   }));
   task.done();
-  return imported + added.length;
+  const present = new Set(getState().objects.map(object => object.id));
+  for (const object of added) if (!present.has(object.id)) object.geometry.dispose();
+  return imported + added.filter(object => present.has(object.id)).length;
 }
 
 async function loadStep(f: File, signal?: AbortSignal): Promise<{ geometry: THREE.BufferGeometry; source: File }> {
@@ -239,7 +243,7 @@ export function newProject(preserveProfiles = false):Promise<boolean> {
   creatingProject=(async()=>{
     const offerUndo=await replacePlate('New Project','Start a new project? Anything currently on the plate will be cleared.');
     if(!offerUndo)return false;
-    leaveDocument();clearPlate(preserveProfiles);newDocument(true);offerUndo();return true;
+    leaveDocument();adoptEdit(() => clearPlate(preserveProfiles));newDocument(true);offerUndo();return true;
   })().finally(()=>{creatingProject=null;});
   return creatingProject;
 }
@@ -455,7 +459,8 @@ export function runJob(api: Api, request: JobRequest, signature: string, sink: J
       sink.progress({ id, pct: 0, stage: 'queued' });
       const warnings: string[] = [], calibLog: string[] = [];
       let pct = 0, resulted = false;
-      const complete = (status: JobStatus) => sink.done({ id: id!, state: 'done', pct: 100, stage: 'done', status, plateSignature: signature, warnings: recordWarnings(status.record, warnings), ...(calib ? { calib, calibLog } : {}) });
+      const complete = (status: JobStatus) => sink.done({ id: id!, state: 'done', pct: 100, stage: 'done', status, plateSignature: signature,
+        ...(request.projectSnapshot ? { projectSnapshot: request.projectSnapshot } : {}), warnings: recordWarnings(status.record, warnings), ...(calib ? { calib, calibLog } : {}) });
       stop = api.events(id, {
         progress: (e) => {
           if (!live || resulted) return;
@@ -517,6 +522,12 @@ let cancelJob: (() => void) | null = null;
 
 export async function slice(calib?: { kind: string; params: string; head?: string }) {
   await flushReady();
+  if (collaborative() && !calib && getState().objects.length) {
+    try {
+      await (await import('./flow/project')).flushProject();
+      await (await import('./flow/collaboration')).syncSharedProject();
+    } catch (error) { toast(error instanceof Error ? error.message : String(error)); return; }
+  }
   const [{methodAvailability}, {methodSelectionProblem}] = await Promise.all([import('./profiles/method-context'), import('./profiles/capabilities')]);
   const s = getState();
   if (!s.api || !s.objects.length && !calib || s.job.state === 'running' || s.job.state === 'submitting') return;
@@ -525,14 +536,22 @@ export async function slice(calib?: { kind: string; params: string; head?: strin
   const generation = ++sliceGeneration, document = documentGeneration(), projectId = projectFlow.get().context.id, plate = s.plateIndex;
   const current = () => generation === sliceGeneration && document === documentGeneration() && projectId === projectFlow.get().context.id && plate === getState().plateIndex;
   const signature = plateSignature(s);
+  let projectSnapshot: JobRequest['projectSnapshot'];
+  if (collaborative() && !calib) {
+    try {
+      projectSnapshot = await (await import('./projects/versions')).sealCurrent(signature) ?? undefined;
+      if (!projectSnapshot) throw new Error('The plate changed before slicing. Wait for shared changes to save and try again.');
+    } catch (error) { toast(error instanceof Error ? error.message : String(error)); return; }
+  }
   const { library, output } = jobFields(s);
   const request = calib ? { library, overrides: calibOverrides(s, calib.kind), output, events: [], files: [], calib: calib.kind, calib_params: calib.params, calib_head: calib.head }
     : await plateJob(s).catch((e: unknown) => String(e));
   if (!current() || request === null) return;
   if (typeof request === 'string') return void setState({ job: { state: 'failed', pct: 0, stage: '', error: request } });
+  if (projectSnapshot) (request as JobRequest).projectSnapshot = projectSnapshot;
   const navigation = beginSlicePreview(signature);
   void loadPreviewView();
-  setState({ tab: 'prepare', job: { state: 'submitting', pct: 0, stage: 'uploading', plateSignature: signature, calib: calib?.kind } });
+  setState({ tab: 'prepare', job: { state: 'submitting', pct: 0, stage: 'uploading', plateSignature: signature, calib: calib?.kind, projectSnapshot } });
   cancelJob = runJob(s.api, request, signature, {
     progress: ({ id, ...p }) => { if (!current()) return; bindSlicePreview(navigation, id); setState(st => id ? {job: {...st.job, id, state: 'running', ...p}} : st.job.state === 'submitting' ? {job: {...st.job, ...p}} : {}); },
     done: (job) => { if (!current()) return; bindSlicePreview(navigation, job.id); setState({job: {...job, stale: plateSignature(getState()) !== signature}}); },

@@ -1,10 +1,12 @@
 import { tools } from '../flow/tools';
+import { canManipulateObjects } from '../flow/collaboration';
+import { useEditingStatus } from '../persist/project-collaboration';
 import { takeProbedCanvas } from '../browser-support';
 import { useEffect, useRef } from 'react';
 import * as THREE from 'three';
 import { CameraViews } from './CameraViews';
 import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js';
-import { effectiveConfig, getState, isSelected, markStale, selectionOf, toggleSelection, printerPreset, setPaint, setState, subscribeStore, updateInstance, updateObject, updateVolume, useStore, type CutConnector, type Instance, type PlateObject, type SeamMode, type State, type Volume, type VolumeType } from '../state/store';
+import { effectiveConfig, getState, isSelected, markStale, selectedObjectIds, selectionOf, toggleSelection, printerPreset, setPaint, setState, subscribeStore, updateInstance, updateObject, updateVolume, useStore, type CutConnector, type Instance, type PlateObject, type SeamMode, type State, type Volume, type VolumeType } from '../state/store';
 import { HOVER_COLOR, SELECTION_COLOR, SelectionBounds, selectedSurface } from './selectionVisual';
 import { PaintView } from './paintView';
 import { viewOptions, subscribeViewOptions } from './viewOptions';
@@ -55,6 +57,7 @@ function brightenColor(c: THREE.Color): THREE.Color {
 }
 
 export default function Plater3D() {
+  const editing = useEditingStatus();
   const host = useRef<HTMLDivElement>(null);
   const gizmo = useStore((s) => s.gizmo);
   const gizmoRef = useRef<(g: State['gizmo']) => void>(() => {});
@@ -864,6 +867,9 @@ void main() {
     });
     const uniformFactor = (v: THREE.Vector3) => Math.max(0.01, [v.x, v.y, v.z].reduce((a, b) => Math.abs(b - 1) > Math.abs(a - 1) ? b : a, 1));
     const syncGizmo = (s: State) => {
+      if (s.selected && !canManipulateObjects(selectedObjectIds(s))) {
+        tc.detach(); rotateGizmo!.detach(); slantRings.detach(); return;
+      }
       if (s.gizmo !== 'rotate') rotateGizmo!.detach();
       if (s.gizmo !== 'slant') slantRings.detach();
       if (s.gizmo === 'slant') {
@@ -1113,6 +1119,7 @@ void main() {
       const s = getState(), o = s.objects.find((ob) => ob.id === object)!;
       const i = o.instances.find((ii) => ii.id === instance)!;
       const group = s.objects.filter((ob) => !ob.project?.placeholder).flatMap((ob) => ob.instances.filter((ii) => isSelected(s.selected, ob.id, ii.id)).map((ii) => ({ object: ob.id, instance: ii.id, x: ii.x, y: ii.y })));
+      if (!canManipulateObjects(group.map(item => item.object))) return;
       if (p && !o.project?.placeholder) drag = { object, instance, dx: i.x - p.x, dy: i.y - p.y, x: i.x, y: i.y, group, moved: false };
       controls.enabled = false;
       renderer.domElement.setPointerCapture(ev.pointerId);
@@ -1323,7 +1330,7 @@ void main() {
       const state = ev.button === 2 ? 2 : ev.shiftKey ? 0 : s.gizmo === 'color' ? paintTool().filament : 1;
       const hit = paintPick(ev);
       const id = hit?.object.userData as { object: number; instance: number } | undefined;
-      if (!hit || !id) return;
+      if (!hit || !id || !canManipulateObjects([id.object])) return;
       ev.stopImmediatePropagation();
       ev.preventDefault();
       if (id.object !== s.selected?.object || s.gizmo === 'fuzzy' && state === 2 || paintTool().tool === 'gap') return;
@@ -1719,7 +1726,7 @@ void main() {
     };
   }, []);
 
-  useEffect(() => gizmoRef.current(gizmo), [gizmo]);
+  useEffect(() => gizmoRef.current(gizmo), [gizmo, editing]);
 
   return <div ref={host} style={{ position: 'absolute', inset: 0 }} />;
 }

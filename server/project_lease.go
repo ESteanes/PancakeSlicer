@@ -133,6 +133,10 @@ func (st *workspaceStore) leaseRoutes(mux *http.ServeMux) {
 				workspaceFailure(w, 404, "project_missing", "Project not found.", "open_projects", 0)
 				return
 			}
+			if d.Projects[id].Collaborative {
+				workspaceFailure(w, 409, "collaboration_required", "This project uses object and settings locks. Reload the app to continue.", "reload", d.Projects[id].Revision)
+				return
+			}
 			now, leases := time.Now(), st.leaseTable()
 			l := leases[id]
 			switch {

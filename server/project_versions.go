@@ -480,6 +480,10 @@ func (s *Server) versionRoutes(mux *http.ServeMux) {
 			return
 		}
 		version(w, r, func(_ *workspaceData, id string, x *versionIndex, v *projectVersion) {
+			if pinned := j.Request.ProjectSnapshot; pinned != nil && (pinned.ID != id || pinned.Version != v.ID || pinned.Revision != in.Revision) {
+				workspaceFailure(w, 409, "snapshot_mismatch", "This slice belongs to a different project version.", "open_version", 0)
+				return
+			}
 			if v.Revision != in.Revision {
 				workspaceFailure(w, 409, "version_moved", "This version changed after the slice started.", "slice_again", 0)
 				return
