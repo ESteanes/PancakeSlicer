@@ -350,7 +350,7 @@ export async function saveProjectSnapshot(runtime: RecoveryRuntime, capture: {
     const acknowledgement = await storage.save(id, meta, committed, meta.objects === 0 ? null : runtime.activeWrite(id, gen, version) ? thumbnail() ?? undefined : undefined);
     if (acknowledgement.record && runtime.activeWrite(id, gen, version))
       await (await import('./collaboration')).acceptSharedRecord(acknowledgement.record, document);
-    savedVersionBase(id, document);
+    if (!acknowledgement.record) savedVersionBase(id, document);
     if (runtime.activeWrite(id, gen, version)) project.send({ type: 'SAVED', id, ...meta, ...acknowledgement,
       ...(acknowledgement.record ? { name: acknowledgement.record.meta.name, objects: acknowledgement.record.meta.objects } : {}), checkpoint: receipt.checkpoint });
     if (!runtime.activeWrite(id, gen, version) || project.get().value !== 'conflict') {

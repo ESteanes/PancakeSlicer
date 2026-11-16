@@ -118,7 +118,17 @@ func (st *workspaceStore) read() (*workspaceData, error) {
 			return nil, fmt.Errorf("Saved project %s has corrupted data: %w", id, err)
 		}
 	}
-	if migrateWorkspace(&d, time.Now()) {
+	changed := migrateWorkspace(&d, time.Now())
+	for id, receipt := range d.Operations {
+		var response map[string]json.RawMessage
+		if json.Unmarshal(receipt.Response, &response) == nil && len(response) == 3 && response["operationId"] != nil && response["revision"] != nil && response["record"] != nil {
+			delete(response, "record")
+			receipt.Response = jsonValue(response)
+			d.Operations[id] = receipt
+			changed = true
+		}
+	}
+	if changed {
 		if err := st.save(&d); err != nil {
 			return nil, err
 		}
@@ -702,6 +712,8 @@ func (st *workspaceStore) projectWrite(w http.ResponseWriter, r *http.Request, a
 			st.recordVersion(id, next.Revision, next.Record, []versionChange{{Key: "name", Label: "Renamed to " + in.Name}}, action)
 		case "duplicate":
 			st.recordVersion(id, next.Revision, next.Record, []versionChange{{Label: "Copied"}}, action)
+		case "restore":
+			st.recordVersion(id, next.Revision, next.Record, []versionChange{{Label: "Restored from Trash"}}, action)
 		}
 	})
 }

@@ -48,8 +48,8 @@ export { projectThumbnail as thumbnail } from '../projects/thumbnail';
 
 export async function decode(doc: StoredDoc, get: (key: string) => Promise<Blob | null>, reuse?: { doc: StoredDoc; state: Doc }): Promise<Partial<State>> {
   const existing = reuse ? encode(reuse.state).blobs : new Map<string, Blob>();
-  const oldStored = new Map(reuse ? [...reuse.doc.objects, ...reuse.doc.projectPlates.flatMap(p => p.objects)].map(o => [o.id, o]) : []);
-  const oldLive = new Map(reuse ? [...reuse.state.objects, ...reuse.state.projectPlates.flatMap(p => p.objects)].map(o => [o.id, o]) : []);
+  const oldStored = new Map(reuse ? [...reuse.doc.projectPlates.filter(p => p.index !== reuse.doc.plateIndex).flatMap(p => p.objects), ...reuse.doc.objects].map(o => [o.id, o]) : []);
+  const oldLive = new Map(reuse ? [...reuse.state.projectPlates.filter(p => p.index !== reuse.state.plateIndex).flatMap(p => p.objects), ...reuse.state.objects].map(o => [o.id, o]) : []);
   const blobs = new Map(await Promise.all(Object.entries(doc.files ?? {}).map(async ([k, name]) => {
     const b = existing.get(k) ?? await get(k);
     if (!b) throw new Error('a model file is missing');

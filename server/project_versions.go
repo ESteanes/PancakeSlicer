@@ -208,8 +208,9 @@ func (st *workspaceStore) writeVersion(id string, revision uint64, record json.R
 	json.Unmarshal(record, &meta)
 	now := time.Now().UnixMilli()
 	content := recordContent(record)
-	if last := lastVersion(x); last != nil && (last.Record == sha || content != "" && last.Content == content) && last.Name == meta.Meta.Name {
+	if last := lastVersion(x); last != nil && (!last.Sealed || last.Revision == revision) && (last.Record == sha || content != "" && last.Content == content) && last.Name == meta.Meta.Name {
 		last.Revision, last.Until, last.Record, last.Content = revision, now, sha, content
+		last.Change = mergeChanges(last.Change, change)
 	} else if last := lastVersion(x); last != nil && kind != "duplicate" && !last.Sealed && last.Slice == nil &&
 		now-last.Until < versionIdle.Milliseconds() && now-last.At < versionSpan.Milliseconds() {
 		last.Revision, last.Until, last.Record, last.Content, last.Name, last.Objects = revision, now, sha, content, meta.Meta.Name, meta.Meta.Objects
@@ -421,10 +422,31 @@ func (s *Server) versionRoutes(mux *http.ServeMux) {
 		if !workspaceDecode(w, r, &in) {
 			return
 		}
-		project(w, r, func(_ *workspaceData, id string) {
+		project(w, r, func(d *workspaceData, id string) {
+			p := d.Projects[id]
+			if p.Archived || p.Revision != in.Revision {
+				workspaceFailure(w, 409, "version_moved", "The project changed after this revision.", "reload", p.Revision)
+				return
+			}
 			x, err := st.readVersions(id)
+			if err != nil {
+				workspaceFailure(w, 503, "versions_unavailable", "Version history could not be read.", "retry_storage", p.Revision)
+				return
+			}
 			last := lastVersion(x)
-			if err != nil || last == nil || last.Revision != in.Revision {
+			if last == nil || last.Revision < in.Revision {
+				if err = st.writeVersion(id, p.Revision, p.Record, nil, "save"); err != nil {
+					workspaceFailure(w, 507, "versions_write_failed", "Version history could not be saved.", "retry_storage", p.Revision)
+					return
+				}
+				x, err = st.readVersions(id)
+				if err != nil {
+					workspaceFailure(w, 503, "versions_unavailable", "Version history could not be read.", "retry_storage", p.Revision)
+					return
+				}
+				last = lastVersion(x)
+			}
+			if last == nil || last.Revision != in.Revision {
 				workspaceFailure(w, 409, "version_moved", "The project changed after this revision.", "reload", 0)
 				return
 			}

@@ -1,4 +1,5 @@
 import { projectId } from './identity';
+import type { VersionChange } from '../projects/version-change';
 export interface ProjectMeta {
   id: string;
   name: string;
@@ -28,7 +29,7 @@ export interface ProjectStore {
   readonly kind: 'service';
   list(): Promise<ProjectMeta[]>;
   load(id: string): Promise<{ meta: ProjectMeta; doc: StoredDocBase } | null>;
-  save(id: string, meta: Omit<ProjectMeta, 'id' | 'thumbnail'>, doc: StoredDocBase, thumbnail?: string | null): Promise<{ revision: number; savedAt: number; record?: import('./project-collaboration').SharedRecord }>;
+  save(id: string, meta: Omit<ProjectMeta, 'id' | 'thumbnail'> & { change?: VersionChange[] }, doc: StoredDocBase, thumbnail?: string | null): Promise<{ revision: number; savedAt: number; record?: import('./project-collaboration').SharedRecord }>;
   rename(id: string, name: string): Promise<ProjectCommandAck>;
   duplicate(id: string, newId: string, name: string): Promise<ProjectMeta>;
   remove(id: string): Promise<ProjectCommandAck>;

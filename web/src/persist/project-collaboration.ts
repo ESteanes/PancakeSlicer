@@ -1,6 +1,7 @@
 import { useSyncExternalStore } from 'react';
 import { sessionId } from '../api/session';
 import { deviceLabel } from '../flow/project-lease';
+import type { VersionChange } from '../projects/version-change';
 import { newKey, type ProjectMeta, type StoredDocBase } from './backend';
 import { jsonWrite, serviceJson } from './service';
 import { sharedChanges, splitShared, type Resources, type ResourceChange } from './shared-document';
@@ -109,9 +110,9 @@ export async function releaseResources(id: string, keys?: string[]) {
 }
 export function forgetResources(id: string) { owned.delete(id); joined.delete(id); }
 
-interface PendingWrite { request: RequestInit; target: Resources }
+interface PendingWrite { operationId: string; request: RequestInit; target: Resources }
 const pending = new Map<string, PendingWrite>();
-export async function saveShared(id: string, doc: StoredDocBase) {
+export async function saveShared(id: string, doc: StoredDocBase, metadata: { thumbnail?: string | null; change?: VersionChange[] } = {}) {
   await joinProject(id);
   let base = bases.get(id), local = localBases.get(id);
   if (!base || !local) throw new Error('Reload this project before saving shared edits.');
@@ -130,20 +131,25 @@ export async function saveShared(id: string, doc: StoredDocBase) {
         change.token = tokens[change.key];
       }
       const stored = doc as StoredDocBase & { recoveryCheckpoint?: unknown };
-      write = { target, request: jsonWrite('POST', { operationId: newKey(), changes, files: doc.files ?? {}, checkpoint: stored.recoveryCheckpoint }) };
+      const operationId = newKey();
+      write = { operationId, target, request: jsonWrite('POST', { operationId, changes, files: doc.files ?? {}, checkpoint: stored.recoveryCheckpoint, ...metadata }) };
       pending.set(id, write);
     }
-    const ack = await serviceJson<{ revision: number; record: SharedRecord }>(`${path(id)}/changes`, write.request).catch((error: unknown) => {
+    const ack = await serviceJson<{ revision: number; operationId: string }>(`${path(id)}/changes`, write.request).catch((error: unknown) => {
       const status = (error as { status?: number }).status;
       if (status && status >= 400 && status < 500) pending.delete(id);
       throw error;
     });
-    if (!ack?.record || ack.record.meta.revision !== ack.revision) throw new Error('Could not verify the shared project save.');
+    if (!ack || ack.operationId !== write.operationId || !Number.isSafeInteger(ack.revision) || ack.revision < 1)
+      throw new Error('Could not verify the shared project save.');
+    const record = await readShared(id);
+    if (record.meta.id !== id || !Number.isSafeInteger(record.meta.revision) || record.meta.revision! < ack.revision)
+      throw new Error('Could not verify the shared project save.');
     pending.delete(id);
-    base = ack.record;
+    base = record;
     rememberShared(base);
     localBases.set(id, write.target);
-    if (write.target === target) return { revision: ack.revision, savedAt: base.meta.savedAt, record: base };
+    if (write.target === target) return { revision: base.meta.revision!, savedAt: base.meta.savedAt, record: base };
     local = write.target;
   }
 }

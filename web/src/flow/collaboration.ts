@@ -9,6 +9,7 @@ import { acquireResources, collaborative, editingStatus, forgetResources, heldTo
   releaseResources, rememberLocal, rememberShared, renewResources, sharedBase, updateEditingStatus, receiveEditingStatus, type EditingUpdate, type SharedRecord } from '../persist/project-collaboration';
 import { adoptShared, flushProject, project } from './project';
 import { versionShown, versionView } from './version-view';
+import { savedVersionBase } from '../projects/versions';
 
 let started = false, active: string | null = null, activeGeneration = -1;
 let controller: AbortController | null = null;
@@ -68,6 +69,7 @@ export async function acceptSharedRecord(record: SharedRecord, submitted?: Doc) 
   rememberShared(record);
   rememberLocal(id, encode(remote).stored);
   baseline = { record, live: remote };
+  savedVersionBase(id, remote);
   if (!submitted) project.send({ type: 'SYNC', meta: record.meta });
 }
 

@@ -1,5 +1,3 @@
-import { documentText } from './wire';
-
 export type SharedObject = { id: number; [key: string]: unknown };
 export type SharedPlate = { index: number; objects?: SharedObject[]; events?: unknown[]; [key: string]: unknown };
 export interface SharedDocument {
@@ -16,26 +14,33 @@ export interface SettingsResource { fields: Record<string, unknown>; plates: Sha
 export type Resources = Record<string, ObjectResource | SettingsResource>;
 export interface ResourceChange { key: string; before: ObjectResource | SettingsResource | null; after: ObjectResource | SettingsResource | null; token?: string }
 
-const blobIds = new WeakMap<Blob, number>();
-let blobSerial = 0;
-export function resourceText(value: unknown): string {
-  const normalize = (item: unknown): unknown => {
-    if (item instanceof Blob) {
-      if (!blobIds.has(item)) blobIds.set(item, ++blobSerial);
-      return { blob: blobIds.get(item) };
-    }
-    if (item && typeof item === 'object' && 'isBufferGeometry' in item && 'uuid' in item) return { geometry: item.uuid };
-    if (item instanceof Map) return normalize([...item]);
-    if (ArrayBuffer.isView(item)) return JSON.parse(documentText(item)) as unknown;
-    if (item instanceof ArrayBuffer) return JSON.parse(documentText(item)) as unknown;
-    if (Array.isArray(item)) return item.map(normalize);
-    if (item && typeof item === 'object')
-      return Object.fromEntries(Object.entries(item).sort(([a], [b]) => a.localeCompare(b)).map(([key, value]) => [key, normalize(value)]));
-    return item;
-  };
-  return JSON.stringify(normalize(value));
+export function equalResource(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  if (a === null || b === null || typeof a !== 'object' || typeof b !== 'object') return false;
+  if (a instanceof Blob || b instanceof Blob) return false;
+  if ('isBufferGeometry' in a || 'isBufferGeometry' in b)
+    return 'uuid' in a && 'uuid' in b && a.uuid === b.uuid;
+  if (a instanceof Date || b instanceof Date) return a instanceof Date && b instanceof Date && a.getTime() === b.getTime();
+  if (a instanceof Map || b instanceof Map) {
+    if (!(a instanceof Map) || !(b instanceof Map) || a.size !== b.size) return false;
+    for (const [key, value] of a) if (!b.has(key) || !equalResource(value, b.get(key))) return false;
+    return true;
+  }
+  if (ArrayBuffer.isView(a) || a instanceof ArrayBuffer || ArrayBuffer.isView(b) || b instanceof ArrayBuffer) {
+    if (a.constructor.name !== b.constructor.name) return false;
+    const bytes = (value: object) => value instanceof ArrayBuffer ? new Uint8Array(value)
+      : ArrayBuffer.isView(value) ? new Uint8Array(value.buffer, value.byteOffset, value.byteLength) : null;
+    const x = bytes(a), y = bytes(b);
+    if (!x || !y || x.length !== y.length) return false;
+    for (let i = 0; i < x.length; i++) if (x[i] !== y[i]) return false;
+    return true;
+  }
+  if (Array.isArray(a) || Array.isArray(b))
+    return Array.isArray(a) && Array.isArray(b) && a.length === b.length && a.every((value, i) => equalResource(value, b[i]));
+  const x = a as Record<string, unknown>, y = b as Record<string, unknown>;
+  const keys = Object.keys(x).filter(key => x[key] !== undefined);
+  return keys.length === Object.keys(y).filter(key => y[key] !== undefined).length && keys.every(key => Object.hasOwn(y, key) && equalResource(x[key], y[key]));
 }
-export const equalResource = (a: unknown, b: unknown) => a === b || resourceText(a) === resourceText(b);
 
 export function splitShared(input: unknown, base?: Resources): Resources {
   const doc = input as SharedDocument;

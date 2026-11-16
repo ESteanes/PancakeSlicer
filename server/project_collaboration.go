@@ -412,6 +412,8 @@ func (st *workspaceStore) applyProjectChanges(w http.ResponseWriter, r *http.Req
 		Changes     []sharedChange    `json:"changes"`
 		Files       map[string]string `json:"files"`
 		Checkpoint  json.RawMessage   `json:"checkpoint"`
+		Thumbnail   json.RawMessage   `json:"thumbnail,omitempty"`
+		Change      []versionChange   `json:"change,omitempty"`
 	}
 	if !workspaceDecode(w, r, &in) {
 		return
@@ -476,7 +478,38 @@ func (st *workspaceStore) applyProjectChanges(w http.ResponseWriter, r *http.Req
 				files[key] = name
 			}
 		}
-		record.Doc["files"] = files
+		used := map[string]any{}
+		keep := func(value any) bool {
+			if value == nil {
+				return true
+			}
+			key, ok := value.(string)
+			name, exists := files[key]
+			if !ok || !exists {
+				return false
+			}
+			used[key] = name
+			return true
+		}
+		validFiles := keep(record.Doc["project"])
+		for _, plate := range record.Doc["projectPlates"].([]any) {
+			for _, value := range plate.(map[string]any)["objects"].([]any) {
+				object := value.(map[string]any)
+				validFiles = keep(object["source"]) && validFiles
+				if native, ok := object["native"].(map[string]any); ok {
+					if refs, ok := native["files"].(map[string]any); ok {
+						for _, ref := range refs {
+							validFiles = keep(ref) && validFiles
+						}
+					}
+				}
+			}
+		}
+		if !validFiles {
+			workspaceFailure(w, 400, "project_invalid", "A model file is missing from the project manifest.", "reload", p.Revision)
+			return
+		}
+		record.Doc["files"] = used
 		if len(in.Checkpoint) > 0 {
 			var checkpoint any
 			json.Unmarshal(in.Checkpoint, &checkpoint)
@@ -484,6 +517,11 @@ func (st *workspaceStore) applyProjectChanges(w http.ResponseWriter, r *http.Req
 		}
 		p.Revision++
 		record.Meta["savedAt"] = time.Now().UnixMilli()
+		if len(in.Thumbnail) > 0 {
+			var thumbnail any
+			json.Unmarshal(in.Thumbnail, &thumbnail)
+			record.Meta["thumbnail"] = thumbnail
+		}
 		p.Record, err = projectRecord(jsonValue(record), id, p.Revision)
 		if err == nil {
 			err = st.checkAssets(p.Record)
@@ -493,9 +531,9 @@ func (st *workspaceStore) applyProjectChanges(w http.ResponseWriter, r *http.Req
 			return
 		}
 		d.Projects[id] = p
-		response := map[string]any{"revision": p.Revision, "operationId": in.OperationID, "record": p.Record}
+		response := map[string]any{"revision": p.Revision, "operationId": in.OperationID}
 		if st.commit(w, d, in.OperationID, digest, response) {
-			st.recordVersion(id, p.Revision, p.Record, nil, "save")
+			st.recordVersion(id, p.Revision, p.Record, in.Change, "save")
 		}
 	})
 }
