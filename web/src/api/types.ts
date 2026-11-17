@@ -102,6 +102,7 @@ export interface PlateJson {
 
 export interface JobLibrary { printer: string; filaments: string[]; print: string; layerHeight?: number }
 export interface JobRequest {
+  projectSnapshot?: { id: string; revision: number; version: number };
   library: JobLibrary;
   files: { name: string; blob: Blob }[];
   overrides: Config;

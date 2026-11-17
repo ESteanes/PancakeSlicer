@@ -1,6 +1,6 @@
 import type { PlateObject, State } from '../state/store';
 import type { ProjectItem } from './threemf';
-import { markStale, newId, setState, toast } from '../state/store';
+import { getState, markStale, newId, setState, toast } from '../state/store';
 import { documentGeneration, undoable } from '../state/history';
 import { beginBusy } from '../state/busy';
 import { importing } from '../flow/import';
@@ -91,6 +91,8 @@ export async function importObjects(file: File, allowNew = false, sourceUrl?: st
     }
     if (choice !== 'new' && !task.current()) return 0;
     undoable('Import objects', () => setState((state) => objectsPatch(state, [...plates.values()].sort((a, b) => a.index - b.index))));
+    const present = new Set(listedPlates(getState()).flatMap(plate => plate.objects.map(object => object.id)));
+    if (!objects.every(object => present.has(object.id))) return 0;
     committed = true;
     task.done();
     return objects.length;

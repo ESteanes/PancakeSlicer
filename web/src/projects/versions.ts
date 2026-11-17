@@ -121,7 +121,7 @@ export async function restoreVersion() {
   void refreshHistory(id);
 }
 
-async function sealCurrent(signature: string): Promise<{ id: string; revision: number; version: number } | null> {
+export async function sealCurrent(signature: string): Promise<{ id: string; revision: number; version: number } | null> {
   await flushProject();
   const { value, context } = project.get();
   if (state.viewing || value !== 'saved' || plateSignature(getState()) !== signature) return null;
@@ -130,9 +130,15 @@ async function sealCurrent(signature: string): Promise<{ id: string; revision: n
 }
 let sealing: { signature: string; done: ReturnType<typeof sealCurrent> } | null = null;
 const finishedJob = (job: JobView = getState().job) =>
-  job.state === 'done' && job.id && !job.stale && !job.calib && job.plateSignature && job.plateSignature === plateSignature(getState()) ? job : null;
+  job.state === 'done' && job.id && !job.calib && job.plateSignature && (job.projectSnapshot || !job.stale && job.plateSignature === plateSignature(getState())) ? job : null;
 async function attachSlice(job: JobView | null) {
   if (!job?.id || !job.plateSignature || state.viewing) return;
+  if (job.projectSnapshot) {
+    const target = job.projectSnapshot;
+    await post(`${path(target.id)}/${target.version}/slice`, { revision: target.revision, jobId: job.id });
+    if (state.open && state.projectId === target.id) void refreshHistory(target.id);
+    return;
+  }
   const seal = sealing?.signature === job.plateSignature ? await sealing.done.catch(() => null) : null;
   const target = seal && seal.revision === project.get().context.revision ? seal : await sealCurrent(job.plateSignature);
   if (!target || plateSignature(getState()) !== job.plateSignature) return;
@@ -148,7 +154,7 @@ export function startVersionTracking() {
   subscribeStore(() => {
     const job = getState().job;
     if (state.viewing || job.calib || !job.plateSignature) return;
-    if ((job.state === 'submitting' || job.state === 'running') && job.plateSignature !== started) {
+    if (!job.projectSnapshot && (job.state === 'submitting' || job.state === 'running') && job.plateSignature !== started) {
       started = job.plateSignature;
       const done = sealCurrent(started);
       done.catch(() => {});

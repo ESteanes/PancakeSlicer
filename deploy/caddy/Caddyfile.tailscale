@@ -1,0 +1,37 @@
+{
+  admin off
+  auto_https off
+  persist_config off
+}
+:8080 {
+  basic_auth {
+    {env.PANCAKE_USERNAME} {env.PANCAKE_PASSWORD_HASH}
+  }
+  @cross_site {
+    method POST PUT PATCH DELETE
+    header Sec-Fetch-Site cross-site
+  }
+  respond @cross_site 403
+  request_body {
+    max_size 512MiB
+  }
+  header {
+    -Server
+    X-Content-Type-Options nosniff
+    X-Frame-Options DENY
+    Referrer-Policy no-referrer
+    Strict-Transport-Security "max-age=31536000"
+  }
+  reverse_proxy pancakeslicer:6868 {
+    header_up -Authorization
+    header_up X-Forwarded-Proto https
+    flush_interval -1
+    transport http {
+      response_header_timeout 40m
+    }
+  }
+}
+http://127.0.0.1:8081 {
+  bind 127.0.0.1
+  reverse_proxy /api/healthz pancakeslicer:6868
+}

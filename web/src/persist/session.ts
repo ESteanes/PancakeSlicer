@@ -4,6 +4,7 @@ import type { ProjectPlate } from '../plater/threemf';
 import type { Doc } from '../state/history';
 import { reserveIds, type NativeObject, type PlateObject, type State, type Volume } from '../state/store';
 import { newKey, type StoredDocBase } from './backend';
+import { equalResource } from './shared-document';
 
 type StoredVolume = Omit<Volume, 'geometry'> & { geometry: { position: Float32Array; normal?: Float32Array; index: Uint32Array | Uint16Array | null } };
 type StoredObject = Omit<PlateObject, 'geometry' | 'source' | 'volumes' | 'native'> & { source: string; volumes?: StoredVolume[];
@@ -45,9 +46,12 @@ export function encode(doc: Doc): { stored: StoredDoc; blobs: Map<string, Blob> 
 
 export { projectThumbnail as thumbnail } from '../projects/thumbnail';
 
-export async function decode(doc: StoredDoc, get: (key: string) => Promise<Blob | null>): Promise<Partial<State>> {
+export async function decode(doc: StoredDoc, get: (key: string) => Promise<Blob | null>, reuse?: { doc: StoredDoc; state: Doc }): Promise<Partial<State>> {
+  const existing = reuse ? encode(reuse.state).blobs : new Map<string, Blob>();
+  const oldStored = new Map(reuse ? [...reuse.doc.projectPlates.filter(p => p.index !== reuse.doc.plateIndex).flatMap(p => p.objects), ...reuse.doc.objects].map(o => [o.id, o]) : []);
+  const oldLive = new Map(reuse ? [...reuse.state.projectPlates.filter(p => p.index !== reuse.state.plateIndex).flatMap(p => p.objects), ...reuse.state.objects].map(o => [o.id, o]) : []);
   const blobs = new Map(await Promise.all(Object.entries(doc.files ?? {}).map(async ([k, name]) => {
-    const b = await get(k);
+    const b = existing.get(k) ?? await get(k);
     if (!b) throw new Error('a model file is missing');
     const file = b instanceof File && (!name || b.name === name) ? b : new File([b], name || k);
     blobKeys.set(file, k);
@@ -76,11 +80,17 @@ export async function decode(doc: StoredDoc, get: (key: string) => Promise<Blob 
   const simplify = (o: StoredObject) => !o.native && o.simplification?.kept !== 'original' &&
     (!!o.simplification || !Object.values(o.paint ?? {}).some(Boolean) && !o.volumes?.some((v) => Object.values(v.paint ?? {}).some(Boolean)));
   const meshKey = (o: StoredObject) => o.native ? o.source : `${o.source}/${simplify(o) ? 'simplified' : 'original'}`;
+  for (const [id, old] of oldStored) {
+    const live = oldLive.get(id);
+    if (live && !old.project) meshes.set(meshKey(old), live.geometry);
+  }
   const loadStoredMesh: (file: File, progress?: (pct: number) => void, simplify?: boolean) => Promise<THREE.BufferGeometry> = loadMesh;
   for (const o of all)
     if (!o.project && !meshes.has(meshKey(o)))
       meshes.set(meshKey(o), await loadStoredMesh(blobs.get(o.source) as File, undefined, simplify(o)));
   const revive = (stored: StoredObject): PlateObject => {
+    const prior = oldStored.get(stored.id), live = oldLive.get(stored.id);
+    if (prior && live && equalResource(prior, stored)) return live;
     const { volumes, native: _stored, ...o } = stored;
     const source = blobs.get(o.source) as File;
     const native = natives.get(stored);
@@ -100,7 +110,8 @@ export async function decode(doc: StoredDoc, get: (key: string) => Promise<Blob 
   };
   const objects = doc.objects.map(revive);
   const projectPlates = doc.projectPlates.map((p) => ({ ...p, objects: p.objects.map(revive) }));
-  reserveIds(Math.max(0, ...[...objects, ...projectPlates.flatMap((p) => p.objects)].flatMap((o) => [o.id, ...o.instances.map((i) => i.id), ...(o.volumes ?? []).map((v) => v.id)])));
+  for (const o of [...objects, ...projectPlates.flatMap(p => p.objects)])
+    for (const id of [o.id, ...o.instances.map(i => i.id), ...(o.volumes ?? []).map(v => v.id), ...(o.ranges ?? []).map(r => r.id)]) reserveIds(id);
   const { files: _files, ...fields } = doc;
   return { ...fields, mixes: doc.mixes ?? {}, processVariant: doc.processVariant ?? null, objects, projectPlates, project: doc.project ? (blobs.get(doc.project) as File) : null };
 }
