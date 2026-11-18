@@ -8473,15 +8473,12 @@ std::string GCode::extrude_perimeters(const Print &print, const std::vector<Obje
     return gcode;
 }
 
-// A plug pours its whole hole volume in one short line over the hole centre, at a moderate volumetric rate so the melt
-// runs down the hole instead of piling up at its mouth.
 std::string GCode::extrude_z_rivet_plug(const ZRivetPlugPath &plug)
 {
-    constexpr double plug_rate_mm3_s = 10.;
-    char             buf[128];
+    char buf[128];
     sprintf(buf, "; Z_RIVET_PLUG volume=%.4f depth=%.3f diameter=%.3f\n", plug.mm3_per_mm * unscale<double>(plug.polyline.to_polyline().length()),
             plug.height, plug.width);
-    return buf + this->extrude_path(plug, "z-rivet plug", plug_rate_mm3_s / plug.mm3_per_mm) + "; Z_RIVET_PLUG_END\n";
+    return buf + this->extrude_path(plug, "z-rivet plug", 0.) + "; Z_RIVET_PLUG_END\n";
 }
 
 std::string GCode::extrude_infill(const Print &print, const std::vector<ObjectByExtruder::Island::Region> &by_region, bool ironing)
@@ -8490,12 +8487,16 @@ std::string GCode::extrude_infill(const Print &print, const std::vector<ObjectBy
     std::vector<const ExtrusionEntity*>           extrusions;
     std::vector<std::unique_ptr<ExtrusionEntity>> reversed;
     const char*                                   extrusion_name = ironing ? "ironing" : "infill";
+    std::vector<const ExtrusionEntity*>           pours;
     for (const ObjectByExtruder::Island::Region &region : by_region)
         if (! region.infills.empty()) {
             extrusions.clear();
             extrusions.reserve(region.infills.size());
+            pours.clear();
             for (const ExtrusionEntity *ee : region.infills)
-                if ((ee->role() == erIroning) == ironing &&
+                if (!ironing && is_z_rivet_pour(*ee))
+                    pours.emplace_back(ee);
+                else if ((ee->role() == erIroning) == ironing &&
                     !(curved_tops_mode(m_config.nonplanar_mode.value) && has_nonplanar_source(*ee)))
                     extrusions.emplace_back(ee);
             if (! extrusions.empty()) {
@@ -8559,6 +8560,13 @@ std::string GCode::extrude_infill(const Print &print, const std::vector<ObjectBy
                 }
                 }
                 }
+            }
+            if (!pours.empty()) {
+                m_config.apply(print.get_print_region(&region - &by_region.front()).config());
+                std::vector<std::unique_ptr<ExtrusionEntity>> unused;
+                chain_and_reorder_extrusion_entities(pours, m_last_pos.to_point(), unused);
+                for (const ExtrusionEntity *pour : pours)
+                    gcode += this->extrude_entity(*static_cast<const ExtrusionEntityCollection *>(pour)->entities.front(), extrusion_name);
             }
         }
     return gcode;

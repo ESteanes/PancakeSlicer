@@ -698,9 +698,6 @@ void PrintObject::prepare_infill()
     this->combine_infill();
     m_print->throw_if_canceled();
 
-    plan_z_rivets(*this);
-    m_print->throw_if_canceled();
-
 #ifdef SLIC3R_DEBUG_SLICE_PROCESSING
     for (size_t region_id = 0; region_id < this->num_printing_regions(); ++ region_id) {
         for (const Layer *layer : m_layers) {
@@ -771,6 +768,8 @@ void PrintObject::infill()
                 }
             }
         );
+        m_print->throw_if_canceled();
+        plan_z_rivets(*this);
         m_print->throw_if_canceled();
         BOOST_LOG_TRIVIAL(debug) << "Filling layers in parallel - end";
         this->set_done(posInfill);
@@ -2262,9 +2261,7 @@ bool PrintObject::invalidate_state_by_config_options(
                    || opt_key == "infill_lock_depth"
                    || opt_key == "skin_infill_depth"
                    || opt_key == "z_rivets"
-                   || opt_key == "z_rivet_diameter"
-                   || opt_key == "z_rivet_span"
-                   || opt_key == "z_rivet_spacing") {
+                   || opt_key == "z_rivet_span") {
             steps.emplace_back(posPrepareInfill);
         } else if (opt_key == "sparse_infill_density") {
             const auto *old_density = old_config.option<ConfigOptionPercent>(opt_key);

@@ -50,7 +50,6 @@
 #include "libslic3r/Slicing.hpp"
 #include "libslic3r/SurfaceCollection.hpp"
 #include "libslic3r/WaveOverhangs/WaveOverhangs.hpp"
-#include "libslic3r/ZRivets.hpp"
 
 namespace Slic3r::FillAdaptive { struct Octree; }
 namespace Slic3r::FillLightning { class Generator; }
@@ -1503,9 +1502,6 @@ void Layer::make_fills(const FillAdaptive::RegionOctrees* fill_octrees, FillLigh
 	        layerm->fills.entities.push_back(&collection);
 	        collection.entities.push_back(thin_fill->clone());
 	    }
-
-	for (LayerRegion *layerm : m_regions)
-	    append_z_rivet_rings(*layerm);
 
 #ifndef NDEBUG
 	for (LayerRegion *layerm : m_regions)
