@@ -77,6 +77,8 @@ var failureTexts = map[string]failureText{
 	"send_timeout":                         {Text: "The printer didn't answer in time.", Step: "Check that the printer is on and on the same network, then retry."},
 	"access_token_required":                {Text: "Access token required."},
 	"access_token_wrong":                   {Text: "That access token isn't right.", Step: "Check the token your admin gave you, then save it again."},
+	"host_not_allowed":                     {Text: "This service only answers on its local address.", Step: "Open it through localhost or 127.0.0.1."},
+	"cross_site_request":                   {Text: "Changes from another website are blocked."},
 	"access_token_body":                    {Text: "Send the access token as {\"token\": \"...\"}."},
 	"admission_refused":                    {Text: "%s"},
 	"api_key_username_password":            {Text: "The API key, username, or password is too long or contains invalid characters."},
