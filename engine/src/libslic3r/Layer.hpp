@@ -72,6 +72,11 @@ public:
 
     ExtrusionEntityCollection   fills;
 
+    struct ZRivetRing { Point center; ExtrusionRole role; bool cap; };
+    struct ZRivetPlug { Point center; float volume; float depth; float diameter; };
+    std::vector<ZRivetRing>     z_rivet_rings;
+    std::vector<ZRivetPlug>     z_rivet_plugs;
+
     Flow    flow(FlowRole role) const;
     Flow    flow(FlowRole role, double layer_height) const;
     Flow    bridging_flow(FlowRole role, bool thick_bridge = false) const;

@@ -480,6 +480,8 @@ set(lisbslic3r_sources
     Layer.cpp
     Layer.hpp
     LayerRegion.cpp
+    ZRivets.cpp
+    ZRivets.hpp
     LayOnFace.cpp
     LayOnFace.hpp
     libslic3r.cpp

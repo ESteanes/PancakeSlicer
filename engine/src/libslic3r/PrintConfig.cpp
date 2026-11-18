@@ -4551,6 +4551,45 @@ void PrintConfigDef::init_fff_params()
     def->mode     = comAdvanced;
     def->set_default_value(new ConfigOptionFloat(0.4));
 
+    def           = this->add("z_rivets", coBool);
+    def->label    = L("Z rivets");
+    def->category = L("Strength");
+    def->tooltip  = L("Leave short vertical holes through the infill on a staggered grid and fill each one from the top with a single "
+                      "plug of plastic, so every plug fuses several layers together. Staggered spans cross every layer boundary.");
+    def->mode     = comSimple;
+    def->set_default_value(new ConfigOptionBool(false));
+
+    def           = this->add("z_rivet_diameter", coFloatOrPercent);
+    def->label    = L("Z rivet diameter");
+    def->category = L("Strength");
+    def->tooltip  = L("Diameter of each rivet hole. Can be a percentage of the nozzle diameter.");
+    def->sidetext = L("mm or %");
+    def->ratio_over = "nozzle_diameter";
+    def->min      = 0;
+    def->max_literal = 5;
+    def->mode     = comAdvanced;
+    def->set_default_value(new ConfigOptionFloatOrPercent(150, true));
+
+    def           = this->add("z_rivet_span", coInt);
+    def->label    = L("Z rivet span");
+    def->category = L("Strength");
+    def->tooltip  = L("Number of layers each rivet plug fills.");
+    def->sidetext = L("layers");
+    def->min      = 2;
+    def->max      = 20;
+    def->mode     = comAdvanced;
+    def->set_default_value(new ConfigOptionInt(6));
+
+    def           = this->add("z_rivet_spacing", coFloat);
+    def->label    = L("Z rivet spacing");
+    def->category = L("Strength");
+    def->tooltip  = L("Distance between neighbouring rivets.");
+    def->sidetext = L("mm");
+    def->min      = 1;
+    def->max      = 50;
+    def->mode     = comAdvanced;
+    def->set_default_value(new ConfigOptionFloat(3));
+
     def           = this->add("sparse_infill_rotate_template", coString);
     def->label    = L("Sparse infill rotation template");
     def->category = L("Strength");

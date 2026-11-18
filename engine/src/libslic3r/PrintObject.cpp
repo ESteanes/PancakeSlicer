@@ -129,6 +129,7 @@
 #include "TriangleMesh.hpp"
 #include "BeltBrim.hpp"
 #include "libslic3r/WaveOverhangs/WaveOverhangs.hpp"
+#include "ZRivets.hpp"
 
 namespace Slic3r { enum class EnforcerBlockerType : int8_t; }
 
@@ -695,6 +696,9 @@ void PrintObject::prepare_infill()
     m_print->throw_if_canceled();
 
     this->combine_infill();
+    m_print->throw_if_canceled();
+
+    plan_z_rivets(*this);
     m_print->throw_if_canceled();
 
 #ifdef SLIC3R_DEBUG_SLICE_PROCESSING
@@ -2256,7 +2260,11 @@ bool PrintObject::invalidate_state_by_config_options(
                    || opt_key == "skeleton_infill_density"
                    || opt_key == "skin_infill_density"
                    || opt_key == "infill_lock_depth"
-                   || opt_key == "skin_infill_depth") {
+                   || opt_key == "skin_infill_depth"
+                   || opt_key == "z_rivets"
+                   || opt_key == "z_rivet_diameter"
+                   || opt_key == "z_rivet_span"
+                   || opt_key == "z_rivet_spacing") {
             steps.emplace_back(posPrepareInfill);
         } else if (opt_key == "sparse_infill_density") {
             const auto *old_density = old_config.option<ConfigOptionPercent>(opt_key);
