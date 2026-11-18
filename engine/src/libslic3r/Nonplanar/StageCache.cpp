@@ -85,6 +85,7 @@ struct SettledRepairs
     RepairHints              hints;
     std::set<int>            planar_surfaces;
     bool                     fallback_off = false;
+    bool                     fallback_zaa = false;
     std::vector<std::string> access_warnings;
     std::vector<CodedWarning> guard_warnings;
 };
@@ -153,6 +154,7 @@ std::string settled_bytes(const SettledRepairs &r)
     w.put_count(r.planar_surfaces.size());
     for (int id : r.planar_surfaces) w.put(id);
     w.put(uint8_t(r.fallback_off));
+    w.put(uint8_t(r.fallback_zaa));
     w.put_count(r.access_warnings.size());
     for (const std::string &warning : r.access_warnings) w.put_string(warning);
     w.put_count(r.guard_warnings.size());
@@ -186,12 +188,14 @@ bool settled_from_bytes(const std::string &in, SettledRepairs &r)
     rd.get(h.travel_lift);
     h.travel_layers.resize(rd.count(sizeof(uint64_t)));
     for (size_t &l : h.travel_layers) { uint64_t v = 0; rd.get(v); l = size_t(v); }
-    uint8_t finish = 0, off = 0;
+    uint8_t finish = 0, off = 0, zaa = 0;
     rd.get(finish);
     h.curved_finish = RepairHints::CurvedFinish(std::min<uint8_t>(finish, uint8_t(RepairHints::CurvedFinish::NativeMesh)));
     for (size_t i = 0, n = rd.count(sizeof(int)); i < n; ++i) { int id = 0; rd.get(id); r.planar_surfaces.insert(id); }
     rd.get(off);
     r.fallback_off = off != 0;
+    rd.get(zaa);
+    r.fallback_zaa = zaa != 0;
     r.access_warnings.resize(rd.count(sizeof(uint64_t)));
     for (std::string &warning : r.access_warnings) rd.get_string(warning);
     r.guard_warnings.resize(rd.count(sizeof(uint64_t)));
@@ -390,7 +394,8 @@ void stage_cache_prime(Print &print)
             if (settled.fallback_off) {
                 object->m_curved_fallback_off = true;
                 object->m_curved_fallback_zaa = false;
-            }
+            } else if (settled.fallback_zaa)
+                object->m_curved_fallback_zaa = true;
             std::lock_guard<std::mutex> lock(settled_mutex);
             primed_access_warnings[object->id().id] = std::move(settled.access_warnings);
             primed_guard_warnings[object->id().id]  = std::move(settled.guard_warnings);
@@ -448,6 +453,7 @@ void stage_cache_record(const Print &print)
             settled.hints.curved_top_areas.clear();
             settled.planar_surfaces = object->m_curved_planar_surfaces;
             settled.fallback_off    = object->m_curved_fallback_off;
+            settled.fallback_zaa    = object->m_curved_fallback_zaa;
             if (const auto it = note.access_warnings.find(object->id().id); it != note.access_warnings.end())
                 settled.access_warnings = it->second;
             const std::string name = warning_object(object->model_object()->name);
