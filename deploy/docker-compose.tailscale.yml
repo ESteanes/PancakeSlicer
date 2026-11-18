@@ -147,6 +147,6 @@ volumes:
 
 configs:
   tailscale-serve:
-    file: "${TAILSCALE_CONFIG_DIR:-./tailscale}/serve.json"
+    file: "${TAILSCALE_CONFIG_DIR}/serve.json"
   gateway-config:
-    file: "${CADDY_CONFIG_DIR:-./caddy}/Caddyfile.tailscale"
+    file: "${CADDY_CONFIG_DIR}/Caddyfile.tailscale"
