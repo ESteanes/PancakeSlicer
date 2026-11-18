@@ -552,6 +552,16 @@ bool Print::invalidate_state_by_config_options(const ConfigOptionResolver & , co
         for (PrintObject *object : m_objects)
             if (Nonplanar::deform_slice_considered(*object))
                 invalidated |= object->invalidate_step(posPerimeters);
+    if (std::any_of(opt_keys.begin(), opt_keys.end(), [](const t_config_option_key &key) {
+            return key == "nonplanar_collision_check" || key == "nonplanar_repair_iterations"; }))
+        for (PrintObject *object : m_objects)
+            if (object->m_nonplanar_repair || !object->m_curved_planar_surfaces.empty() || object->m_curved_fallback_off ||
+                object->m_curved_fallback_zaa) {
+                object->m_nonplanar_repair.reset();
+                object->m_curved_planar_surfaces.clear();
+                object->m_curved_fallback_off = object->m_curved_fallback_zaa = false;
+                invalidated |= object->invalidate_step(posSlice);
+            }
 
     return invalidated;
 }
