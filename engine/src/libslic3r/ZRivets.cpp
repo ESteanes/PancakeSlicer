@@ -83,7 +83,7 @@ void plan_z_rivets(PrintObject &object)
         const int    span  = std::max(2, cfg.z_rivet_span.value);
         const int    cycle = span + 1;
         const double pitch = std::max(1., cfg.z_rivet_spacing.value);
-        const float  clear = float(scale_(r + 1.5 * w));
+        const float  clear = float(scale_(r + w));
 
         std::vector<LayerAreas> areas(layers.size());
         tbb::parallel_for(tbb::blocked_range<size_t>(0, layers.size()), [&](const tbb::blocked_range<size_t> &range) {
