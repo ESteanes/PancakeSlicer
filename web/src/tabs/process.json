@@ -2004,9 +2004,7 @@
             "fill_multiline",
             "sparse_infill_pattern",
             "z_rivets",
-            "z_rivet_diameter",
             "z_rivet_span",
-            "z_rivet_spacing",
             "tpms_adaptive",
             "tpms_interior_density",
             "tpms_adaptive_gradient",
@@ -2078,29 +2076,11 @@
             },
             {
               "options": [
-                "z_rivet_diameter"
-              ],
-              "source": "src/slic3r/GUI/Tab.cpp",
-              "modes": {
-                "z_rivet_diameter": "Advanced"
-              }
-            },
-            {
-              "options": [
                 "z_rivet_span"
               ],
               "source": "src/slic3r/GUI/Tab.cpp",
               "modes": {
                 "z_rivet_span": "Advanced"
-              }
-            },
-            {
-              "options": [
-                "z_rivet_spacing"
-              ],
-              "source": "src/slic3r/GUI/Tab.cpp",
-              "modes": {
-                "z_rivet_spacing": "Advanced"
               }
             },
             {
@@ -5017,9 +4997,7 @@
     "fill_multiline": "Simple",
     "sparse_infill_pattern": "Simple",
     "z_rivets": "Simple",
-    "z_rivet_diameter": "Advanced",
     "z_rivet_span": "Advanced",
-    "z_rivet_spacing": "Advanced",
     "tpms_adaptive": "Advanced",
     "tpms_interior_density": "Advanced",
     "tpms_adaptive_gradient": "Advanced",
@@ -8840,9 +8818,7 @@
     },
     {
       "options": [
-        "z_rivet_diameter",
-        "z_rivet_span",
-        "z_rivet_spacing"
+        "z_rivet_span"
       ],
       "condition": "(z_rivets)",
       "effect": "visible",
