@@ -1,7 +1,7 @@
 
 import { app, BrowserWindow, dialog, ipcMain, Menu, session, shell, type MenuItemConstructorOptions } from 'electron';
 import { spawn, type ChildProcess } from 'node:child_process';
-import { createHash, randomBytes } from 'node:crypto';
+import { createHash, createHmac, randomBytes } from 'node:crypto';
 import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
@@ -9,6 +9,7 @@ import path from 'node:path';
 const MAC = process.platform === 'darwin';
 const EXE = process.platform === 'win32' ? '.exe' : '';
 const DESKTOP_ORIGIN = 'http://127.0.0.1:29731';
+const ACCESS_TOKEN = randomBytes(32).toString('hex');
 
 let server: ChildProcess | null = null;
 let origin = '';
@@ -180,6 +181,7 @@ async function startServer(): Promise<string> {
   const env = { ...process.env };
   const nonce = randomBytes(32).toString('hex');
   env.ORCA_DESKTOP_READY_NONCE = nonce;
+  env.ORCA_WEB_BEARER_TOKEN = ACCESS_TOKEN;
   delete env.ORCA_WEB_SOURCE_ARCHIVE;
   env.ORCA_WEB_SOURCE_URL = 'https://github.com/ZimengXiong/PancakeSlicer';
   delete env.ORCA_BUILD_REVISION;
@@ -400,6 +402,8 @@ async function start() {
   });
   await win.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(STARTING_PAGE)}`);
   origin = await serving;
+  await rendererSession.cookies.set({ url: DESKTOP_ORIGIN, name: 'orca_access', httpOnly: true, sameSite: 'strict',
+    value: createHmac('sha256', ACCESS_TOKEN).update('orca-web-access-v1').digest('hex') });
   if (win && !closing) await win.loadURL(origin);
 }
 
