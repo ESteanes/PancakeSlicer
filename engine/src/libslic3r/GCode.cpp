@@ -181,6 +181,7 @@ using namespace std::literals::string_view_literals;
 #include "Model.hpp"
 #include "MultiNozzleUtils.hpp"
 #include "Slicing.hpp"
+#include "ZRivets.hpp"
 
 namespace fs = boost::filesystem;
 
@@ -7060,8 +7061,6 @@ LayerResult GCode::process_layer(
                     }
                     gcode += this->extrude_infill(print,by_region_specific, true);
                 }
-                if (print_wipe_extrusions == 0 && layer_to_print.object_layer != nullptr)
-                    gcode += this->extrude_z_rivet_plugs(*layer_to_print.object_layer, extruder_id);
                 gcode += this->emit_deferred_after_layer(instance_to_print.print_object, extruder_id);
 
                 if (this->config().gcode_label_objects) {
@@ -8063,6 +8062,8 @@ std::string GCode::extrude_entity(const ExtrusionEntity&                     ent
         if (this->defer_planar_material(entity, description, speed, gcode))
             return gcode;
     }
+    if (const auto *plug = dynamic_cast<const ZRivetPlugPath *>(&entity))
+        return this->extrude_z_rivet_plug(*plug);
     if (const ExtrusionPath* path = dynamic_cast<const ExtrusionPath*>(&entity))
         return this->extrude_path(*path, description, speed);
     else if (const ExtrusionMultiPath* multipath = dynamic_cast<const ExtrusionMultiPath*>(&entity))
@@ -8472,37 +8473,15 @@ std::string GCode::extrude_perimeters(const Print &print, const std::vector<Obje
     return gcode;
 }
 
-// Each plug stirs a small circle at the top of its hole, slowly, then dwells so the melt can sink through the span.
-std::string GCode::extrude_z_rivet_plugs(const Layer &layer, unsigned int extruder_id)
+// A plug pours its whole hole volume in one short line over the hole centre, at a moderate volumetric rate so the melt
+// runs down the hole instead of piling up at its mouth.
+std::string GCode::extrude_z_rivet_plug(const ZRivetPlugPath &plug)
 {
-    constexpr double plug_rate_mm3_s    = 2.;
-    constexpr double max_cross_mm2      = 0.35;
-    constexpr int    dwell_ms           = 250;
-    constexpr int    segments_per_loop  = 12;
-    std::string gcode;
-    for (const LayerRegion *layerm : layer.regions()) {
-        if (layerm->z_rivet_plugs.empty() || layerm->region().extruder(frInfill) != extruder_id + 1)
-            continue;
-        m_config.apply(layerm->region().config());
-        for (const LayerRegion::ZRivetPlug &plug : layerm->z_rivet_plugs) {
-            const double stir  = std::min(0.12, 0.2 * plug.diameter);
-            const int    loops = std::max(1, int(std::ceil(plug.volume / max_cross_mm2 / (2. * M_PI * stir))));
-            Polyline circle;
-            for (int k = 0; k <= loops * segments_per_loop; ++k) {
-                const double a = 2. * M_PI * k / segments_per_loop;
-                circle.points.emplace_back(plug.center + Point::new_scale(stir * std::cos(a), stir * std::sin(a)));
-            }
-            ExtrusionPath path(erInternalInfill, plug.volume / unscale<double>(circle.length()), plug.diameter, plug.depth);
-            path.polyline = Polyline3(circle);
-            char buf[96];
-            sprintf(buf, "; Z_RIVET_PLUG volume=%.4f depth=%.3f\n", plug.volume, plug.depth);
-            gcode += buf;
-            gcode += this->_extrude(path, "z-rivet plug", plug_rate_mm3_s / path.mm3_per_mm);
-            gcode += "G4 P" + std::to_string(dwell_ms) + "\n";
-            gcode += this->retract();
-        }
-    }
-    return gcode;
+    constexpr double plug_rate_mm3_s = 10.;
+    char             buf[128];
+    sprintf(buf, "; Z_RIVET_PLUG volume=%.4f depth=%.3f diameter=%.3f\n", plug.mm3_per_mm * unscale<double>(plug.polyline.to_polyline().length()),
+            plug.height, plug.width);
+    return buf + this->extrude_path(plug, "z-rivet plug", plug_rate_mm3_s / plug.mm3_per_mm) + "; Z_RIVET_PLUG_END\n";
 }
 
 std::string GCode::extrude_infill(const Print &print, const std::vector<ObjectByExtruder::Island::Region> &by_region, bool ironing)

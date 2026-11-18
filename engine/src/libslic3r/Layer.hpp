@@ -72,10 +72,10 @@ public:
 
     ExtrusionEntityCollection   fills;
 
-    struct ZRivetRing { Point center; ExtrusionRole role; bool cap; };
-    struct ZRivetPlug { Point center; float volume; float depth; float diameter; };
-    std::vector<ZRivetRing>     z_rivet_rings;
-    std::vector<ZRivetPlug>     z_rivet_plugs;
+    // One rivet hole on this layer: a sleeve ring where sparse infill surrounds it, a cap disk where it is the floor of a
+    // span in sparse infill, and a plug (plug_volume > 0) on the top layer of a span.
+    struct ZRivetSite { Point center; bool sleeve; bool cap; float plug_volume; float plug_depth; };
+    std::vector<ZRivetSite>     z_rivet_sites;
 
     Flow    flow(FlowRole role) const;
     Flow    flow(FlowRole role, double layer_height) const;
