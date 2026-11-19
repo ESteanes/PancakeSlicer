@@ -2,7 +2,7 @@ import { captureProjectProfiles } from '../profiles/project';
 import type * as THREE from 'three';
 import { plateSignature } from '../slice-input';
 import { getState, setState, toast, type PlateObject, type State } from './store';
-import { splitShared, sharedChanges, applyShared, joinShared, equalResource, type ResourceChange } from '../persist/shared-document';
+import { splitShared, sharedChanges, applyShared, joinShared, equalResource, historyChange, type ResourceChange } from '../persist/shared-document';
 
 const DOC_KEYS = [
   'objects', 'projectPlates', 'plateIndex', 'project', 'projectName', 'projectMaterials', 'projectPresets', 'projectNotice',
@@ -155,16 +155,14 @@ export function redo() {
 
 function restoreChanges(from: Doc, to: Doc): boolean {
   if (import.meta.env.MODE === 'demo') { restore(to); return true; }
-  const before = splitShared(from), after = splitShared(to, before), changes = sharedChanges(before, after);
-  const now = snapshot(), current = splitShared(now, before);
-  if (changes.some(change => !equalResource(current[change.key] ?? null, change.before))) {
+  const change = historyChange(from, to, snapshot());
+  if (!change) {
     toast('This edit cannot be undone because an affected object or setting has changed.');
     return false;
   }
-  const next = joinShared(applyShared(current, changes), now) as unknown as Doc;
-  restore(next);
-  const result = splitShared(snapshot(), after);
-  return changes.every(change => equalResource(result[change.key] ?? null, change.after));
+  restore(change.doc as unknown as Doc);
+  const result = splitShared(snapshot(), splitShared(change.doc));
+  return getState().plateIndex === change.doc.plateIndex && change.changes.every(c => equalResource(result[c.key] ?? null, c.after));
 }
 
 export function receiveHistoryChanges(changes: ResourceChange[]) {

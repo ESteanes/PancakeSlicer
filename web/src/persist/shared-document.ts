@@ -84,6 +84,28 @@ export function joinShared(resources: Resources, personal: unknown): SharedDocum
     collaborationOrder: Object.fromEntries(entries.map(o => [String(o.object.id), o.order])) } as SharedDocument;
 }
 
+export function selectSharedPlate<T extends { plateIndex: number; objects: unknown[]; events: unknown[];
+  projectPlates: { index: number; objects?: unknown[]; events?: unknown[] }[] }>(doc: T, index: number): T {
+  if (!Number.isSafeInteger(index) || index < 1) throw new Error('The saved slice has no valid plate information. Slice the project again.');
+  if (doc.plateIndex === index) return doc;
+  const plates = doc.projectPlates.map(p => p.index === doc.plateIndex ? { ...p, objects: doc.objects, events: doc.events } : p);
+  const plate = plates.find(p => p.index === index);
+  if (!plate) throw new Error('The sliced plate is missing from this project version.');
+  return { ...doc, projectPlates: plates, plateIndex: index, objects: plate.objects ?? [], events: plate.events ?? [], selected: null };
+}
+
+export function historyChange(from: unknown, to: unknown, personal: unknown) {
+  const before = splitShared(from), after = splitShared(to, before), changes = sharedChanges(before, after);
+  const current = splitShared(personal, before), target = to as SharedDocument, local = personal as SharedDocument;
+  if (changes.some(change => !equalResource(current[change.key] ?? null, change.before))) return null;
+  let doc = joinShared(applyShared(current, changes), local);
+  if ((from as SharedDocument).plateIndex !== target.plateIndex) {
+    if (!doc.projectPlates.some(p => p.index === target.plateIndex)) return null;
+    doc = { ...selectSharedPlate(doc, target.plateIndex), selected: target.selected };
+  }
+  return { doc, changes };
+}
+
 export function sharedChanges(before: Resources, after: Resources): ResourceChange[] {
   return [...new Set([...Object.keys(before), ...Object.keys(after)])].flatMap(key => {
     const a = before[key] ?? null, b = after[key] ?? null;

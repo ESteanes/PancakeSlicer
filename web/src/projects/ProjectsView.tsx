@@ -19,6 +19,8 @@ import { Caret } from '../components/Caret';
 import { createPortal } from 'react-dom';
 import { usePhoneSheet } from '../workspace-sheet';
 import { Sep } from '../separator';
+import { OpenProjects } from './OpenProjects';
+import { useOpenProjects } from './open-projects';
 
 const noCommands: readonly Readonly<ProjectCommandStatus>[] = Object.freeze([]);
 const noSubscribe = () => () => {};
@@ -29,10 +31,10 @@ const trashRestores = new Map<string,number|undefined>();
 const commandVerb = {rename:'Rename',duplicate:'Duplicate',archive:'Delete',restore:'Restore'};
 
 type ProjectMeta = ListedProject;
-type Place = {kind:'home'|'recent'|'favorites'|'unsorted'|'trash'} | {kind:'folder';id:string};
+type Place = {kind:'home'|'open'|'recent'|'favorites'|'unsorted'|'trash'} | {kind:'folder';id:string};
 type Sort = 'edited'|'name'|'objects';
 type View = 'grid'|'list';
-const PLACES = [{kind:'home',label:'Home'},{kind:'recent',label:'Recent'},{kind:'favorites',label:'Favorites'},{kind:'unsorted',label:'Unsorted'}] as const;
+const PLACES = [{kind:'home',label:'Home'},{kind:'open',label:'Open now'},{kind:'recent',label:'Recent'},{kind:'favorites',label:'Favorites'},{kind:'unsorted',label:'Unsorted'}] as const;
 const SORTS = [{value:'edited',label:'Last edited'},{value:'name',label:'Name'},{value:'objects',label:'Objects'}] as const;
 const RECENT_MS = 7 * 86400_000, HOME_RECENT = 18;
 const DRAG = 'application/x-orca-projects', FOLDER_DRAG = 'application/x-orca-folder';
@@ -132,6 +134,7 @@ export default function ProjectsView(){return <Boundary><Projects/></Boundary>;}
 
 function Projects() {
   const list=useProjects(),current=useProject(s=>s.context.id),status=useSyncExternalStore(subscribeProjectList,projectListSnapshot);
+  const discovery=useOpenProjects();
   const [storage,setStorage]=useState<ProjectStore|null>(null);
   useEffect(()=>{let active=true;void projectStore().then(store=>{if(active)setStorage(store);});return()=>{active=false;};},[status.state==='ready']);
   const commands=useSyncExternalStore(storage ? storage.subscribeCommands : noSubscribe,storage ? storage.commands : emptyCommands);
@@ -144,14 +147,15 @@ function Projects() {
   const toggleFavorite=(id:string)=>{if(!prefsLoaded)return;const next=new Set(favorites);if(!next.delete(id))next.add(id);savePreferences({'projects.favorites':[...next]});};
   const folderState=useFolders(),folders=folderState.folders;
   const [place,setPlaceState]=useState<Place>(lastPlace);
+  const inOpen=place.kind==='open';
   const [railOpen,setRailOpen]=useState(false),closeRail=()=>setRailOpen(false);
   const phone=usePhoneSheet(),[slot,setSlot]=useState<HTMLElement|null>(null);
   useEffect(()=>setSlot(document.getElementById('topbar-slot')),[phone]);
   const barActions=<>
-    <div className="seg pj-view" role="group" aria-label="View">
+    {!inOpen && <div className="seg pj-view" role="group" aria-label="View">
       <button type="button" aria-pressed={view==='grid'} aria-label="Grid" onClick={()=>savePreferences({'projects.view':'grid'})}><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden><path d="M2 2h5v5H2zM9 2h5v5H9zM2 9h5v5H2zM9 9h5v5H9z" fill="currentColor"/></svg></button>
       <button type="button" aria-pressed={view==='list'} aria-label="List" onClick={()=>savePreferences({'projects.view':'list'})}><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden><path d="M2 3h12v2H2zM2 7h12v2H2zM2 11h12v2H2z" fill="currentColor"/></svg></button>
-    </div>
+    </div>}
     <button type="button" className="btn" onClick={fileVerbs.import}>Import</button>
     <button type="button" className="btn-primary" onClick={fileVerbs.new}>New project</button>
   </>;
@@ -170,7 +174,7 @@ function Projects() {
     for(const p of all){const f=folderOf(p);if(f)inFolder.set(f,(inFolder.get(f)??0)+1);}
     return {recent:all.filter(p=>now-p.savedAt<RECENT_MS).length,favorites:all.filter(p=>favorites.has(p.id)).length,unsorted:all.filter(p=>!folderOf(p)).length,trash:trash?.length,inFolder} as const;
   },[list,trash,favoriteKey,known]);
-  const searching=!!q && !inTrash;
+  const searching=!!q && !inTrash && !inOpen;
   const shown=useMemo(()=>{
     const now=Date.now(),match=(p:ProjectMeta)=>!q || p.name.toLocaleLowerCase().includes(q);
     if(inTrash)return (trash??[]).filter(match).sort(sorters[sort]);
@@ -389,7 +393,7 @@ function Projects() {
   return <div className={`projects${dragging?` dragging-${dragging}`:''}`} onDragOver={e=>{if(e.dataTransfer.types.includes('Files'))e.preventDefault();}} onDrop={onDrop}><div className="pj-layout">
     {railOpen && <div className="pj-scrim" aria-hidden onClick={closeRail}/>}
     <nav className="pj-side" id="pj-rail" aria-label="Projects" data-open={railOpen} onKeyDown={e=>{if(railOpen && e.key==='Escape'){e.stopPropagation();closeRail();}}}>
-      {PLACES.map(x=>railItem(x.kind,x.label,place.kind===x.kind && !searching,x.kind==='home'?undefined:counts[x.kind],()=>go({kind:x.kind}),x.kind==='unsorted'?{folder:null}:x.kind==='home'?{folder:null}:undefined))}
+      {PLACES.filter(x=>x.kind!=='open' || discovery.enabled).map(x=>railItem(x.kind,x.label,place.kind===x.kind && !searching,x.kind==='home'?undefined:x.kind==='open'?discovery.projects?.length:counts[x.kind],()=>go({kind:x.kind}),x.kind==='unsorted'?{folder:null}:x.kind==='home'?{folder:null}:undefined))}
       <div className="pj-tree" role="tree" aria-label="Folders">
         {tree.map(({folder:f,depth})=>{const has=childFolders(folders,f.id).length>0,open=!collapsed.has(f.id),on=place.kind==='folder' && place.id===f.id && !searching;
           return <div key={f.id} className="pj-node" role="treeitem" aria-level={depth+1} aria-expanded={has?open:undefined} aria-selected={on} style={{paddingLeft:`${depth*12}px`}}
@@ -411,13 +415,13 @@ function Projects() {
             ? <span key={f.id}><span aria-hidden>›</span><button type="button" className="btn-ghost" onClick={()=>go({kind:'folder',id:f.id})}>{f.name}</button></span>
             : <span key={f.id}><span aria-hidden>›</span><h1>{f.name}</h1></span>)}
         </nav> : <h1>{title}</h1>}
-        <input className="text pj-search" type="search" placeholder="Search" aria-label="Search all projects" value={query} onChange={e=>setProjectsQuery(e.target.value)} onKeyDown={e=>{if(e.key==='Escape' && query){e.stopPropagation();setProjectsQuery('');}}}/>
+        <input className="text pj-search" type="search" placeholder={inOpen?'Search open projects':'Search'} aria-label={inOpen?'Search open projects':'Search all projects'} value={query} onChange={e=>setProjectsQuery(e.target.value)} onKeyDown={e=>{if(e.key==='Escape' && query){e.stopPropagation();setProjectsQuery('');}}}/>
         <div className="pj-tools">
-          <Dropdown className="pj-sort" aria-label="Sort by" options={SORTS} value={sort} onValueChange={v=>savePreferences({'projects.sort':v})}/>
+          {!inOpen && <Dropdown className="pj-sort" aria-label="Sort by" options={SORTS} value={sort} onValueChange={v=>savePreferences({'projects.sort':v})}/>}
           {phone&&slot?createPortal(<div className="pj-top-actions">{barActions}</div>,slot):barActions}
         </div>
       </header>
-      {failed && !loading && <div className="pj-line" role="alert"><span>{failed}</span><button type="button" className="btn" onClick={()=>{if(inTrash)void loadTrash();else void refreshProjects();}}>Retry</button></div>}
+      {failed && !loading && !inOpen && <div className="pj-line" role="alert"><span>{failed}</span><button type="button" className="btn" onClick={()=>{if(inTrash)void loadTrash();else void refreshProjects();}}>Retry</button></div>}
       {error && <div className="pj-line" role="alert"><span>{error}</span><button type="button" className="btn-ghost" onClick={()=>setError(null)}>Dismiss</button></div>}
       {commands.map(command=>{
         const pending=command.state==='preparing' || command.state==='sending',name=list?.find(p=>p.id===command.id)?.name ?? trash?.find(p=>p.id===command.id)?.name ?? command.name ?? 'Project';
@@ -434,8 +438,13 @@ function Projects() {
         <button type="button" className="btn-ghost" disabled={busy || selected.some(blocked)} onClick={()=>void remove(selected)}>Move to Trash</button>
         <button type="button" className="btn-ghost pj-clear" onClick={()=>dispatch({type:'CLEAR'})}>Clear</button>
       </div>}
-      {loading ? <div className="pj-empty" role="status">Loading…</div>
+      {inOpen ? <OpenProjects discovery={discovery} query={query} current={current}/>
+        : loading ? <div className="pj-empty" role="status">Loading…</div>
         : <div className="pj-scroll scroll-fade">
+          {place.kind==='home' && !searching && !!discovery.projects?.length && <div className="pj-line">
+            <span><span className="pj-live-dot" aria-hidden/> {count(discovery.projects.length,'project open now','projects open now')}</span>
+            <button type="button" className="btn" onClick={()=>go({kind:'open'})}>Browse open projects</button>
+          </div>}
           {tiles}
           {place.kind==='home' && !searching && shown.length>0 && <div className="pj-section"><h2>Recent</h2><button type="button" className="link" onClick={()=>go({kind:'recent'})}>Show all</button></div>}
           {grid_ || (!(tiles && !searching && place.kind==='home') && <div className="pj-empty">{failed ? null : q ? <><strong>No matches</strong><button type="button" className="btn" onClick={()=>setProjectsQuery('')}>Clear search</button></>

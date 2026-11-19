@@ -22,13 +22,14 @@ type editLock struct {
 	Expires int64  `json:"expires"`
 }
 type projectSnapshotRef struct {
-	ID       string `json:"id"`
-	Revision uint64 `json:"revision"`
-	Version  uint64 `json:"version"`
+	ID         string `json:"id"`
+	Revision   uint64 `json:"revision"`
+	Version    uint64 `json:"version"`
+	PlateIndex int    `json:"plateIndex,omitempty"`
 }
 
 func (st *workspaceStore) validProjectSnapshot(snapshot projectSnapshotRef) bool {
-	if st == nil || !workspaceID(snapshot.ID) || snapshot.Version == 0 || snapshot.Revision == 0 {
+	if st == nil || !workspaceID(snapshot.ID) || snapshot.Version == 0 || snapshot.Revision == 0 || snapshot.PlateIndex < 0 {
 		return false
 	}
 	st.mu.Lock()
@@ -539,6 +540,18 @@ func (st *workspaceStore) applyProjectChanges(w http.ResponseWriter, r *http.Req
 }
 
 func (st *workspaceStore) projectEditEvents(w http.ResponseWriter, r *http.Request) {
+	id, session := r.PathValue("id"), r.Header.Get(sessionHeader)
+	label := strings.TrimSpace(r.URL.Query().Get("label"))
+	if !validSession(session) || len(label) > 120 {
+		workspaceFailure(w, 400, "session_invalid", "A valid project session is required.", "reload", 0)
+		return
+	}
+	if label == "" {
+		label = "Browser"
+	}
+	viewer := &projectViewer{session: session, label: label, since: time.Now().UnixMilli()}
+	registered := false
+	defer st.removeProjectViewer(id, viewer)
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("X-Accel-Buffering", "no")
@@ -550,12 +563,18 @@ func (st *workspaceStore) projectEditEvents(w http.ResponseWriter, r *http.Reque
 		st.mu.Lock()
 		d, err := st.read()
 		var raw []byte
+		deleted := false
 		if err == nil {
-			p, ok := d.Projects[r.PathValue("id")]
-			if !ok || p.Archived {
+			p, ok := d.Projects[id]
+			if !ok || p.Archived || p.Record == nil {
+				deleted = true
 				raw = []byte(`{"deleted":true}`)
 			} else {
-				raw, _ = json.Marshal(st.editStatus(r.PathValue("id"), r.Header.Get(sessionHeader), p.Revision))
+				if !registered {
+					st.addProjectViewer(id, viewer)
+					registered = true
+				}
+				raw, _ = json.Marshal(st.editStatus(id, session, p.Revision))
 			}
 		}
 		st.mu.Unlock()
@@ -573,7 +592,7 @@ func (st *workspaceStore) projectEditEvents(w http.ResponseWriter, r *http.Reque
 				return
 			}
 		}
-		if controller.Flush() != nil {
+		if controller.Flush() != nil || deleted {
 			return
 		}
 		select {

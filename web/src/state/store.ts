@@ -8,7 +8,7 @@ import { plateSignature } from '../slice-input';
 import type * as THREE from 'three';
 import { T3 } from '../three-runtime';
 import type { Api } from '../api/client';
-import type { Config, ConfigValue, JobStatus, PresetType, SystemPreset, UserPreset } from '../api/types';
+import type { Config, ConfigValue, JobStatus, PresetType, ProjectSnapshot, SystemPreset, UserPreset } from '../api/types';
 import type { ProjectPlate } from '../plater/threemf';
 import { OPTIONS, type OptionMode } from '../options';
 import { undo, undoable } from './history';
@@ -140,7 +140,7 @@ export type CalibMenu = 'temperature' | 'max-flowrate' | 'pressure-advance' | 'f
 export type Gizmo = 'none' | 'move' | 'rotate' | 'scale' | 'flatten' | 'cut' | 'slant' | 'measure' | 'layers' | 'brimears' | 'boolean' | 'text' | 'svg' | PaintKind;
 
 export interface JobView {
-  projectSnapshot?: { id: string; revision: number; version: number };
+  projectSnapshot?: ProjectSnapshot;
   id?: string;
   state: 'idle' | 'submitting' | 'running' | 'done' | 'failed' | 'canceled';
   pct: number;

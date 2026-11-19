@@ -64,7 +64,10 @@ export interface PresetCatalog {
 
 export type JobState = 'idle' | 'queued' | 'preparing' | 'slicing' | 'storing' | 'done' | 'failed' | 'canceling' | 'cancelled' | 'interrupted' | 'stale';
 
+export interface ProjectSnapshot { id: string; revision: number; version: number; plateIndex: number }
+
 export interface JobStatus {
+  request?: { project_snapshot?: ProjectSnapshot; plate_index?: number };
   id: string;
   state: JobState;
   progress?: number;
@@ -102,7 +105,7 @@ export interface PlateJson {
 
 export interface JobLibrary { printer: string; filaments: string[]; print: string; layerHeight?: number }
 export interface JobRequest {
-  projectSnapshot?: { id: string; revision: number; version: number };
+  projectSnapshot?: ProjectSnapshot;
   library: JobLibrary;
   files: { name: string; blob: Blob }[];
   overrides: Config;

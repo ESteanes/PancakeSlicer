@@ -22,13 +22,14 @@ import (
 )
 
 type workspaceStore struct {
-	mu          sync.Mutex
-	root        string
-	cached      *workspaceData
-	stamp       [2]int64
-	views       map[string]any
-	leases      map[string]*projectLease
-	objectLocks map[string]map[string]*editLock
+	mu             sync.Mutex
+	root           string
+	cached         *workspaceData
+	stamp          [2]int64
+	views          map[string]any
+	leases         map[string]*projectLease
+	objectLocks    map[string]map[string]*editLock
+	projectViewers map[string]map[*projectViewer]struct{}
 }
 type workspaceProject struct {
 	Record        json.RawMessage `json:"record"`
@@ -430,8 +431,12 @@ func projectMeta(p workspaceProject) json.RawMessage {
 	raw, _ := json.Marshal(meta)
 	return raw
 }
+func (st *workspaceStore) cachedProjectMeta(id string, p workspaceProject) json.RawMessage {
+	return st.derived("project-meta:"+id, func() any { return projectMeta(p) }).(json.RawMessage)
+}
 func (st *workspaceStore) register(mux *http.ServeMux) {
 	st.collaborationRoutes(mux)
+	mux.HandleFunc("GET /api/projects/open", st.openProjects)
 	st.leaseRoutes(mux)
 	st.folderRoutes(mux)
 	st.thumbnailRoutes(mux)
@@ -444,9 +449,9 @@ func (st *workspaceStore) register(mux *http.ServeMux) {
 					SavedAt float64 `json:"savedAt"`
 				}
 				var rows []listed
-				for _, p := range d.Projects {
+				for id, p := range d.Projects {
 					if p.Archived == archived && p.Record != nil {
-						row := listed{meta: projectMeta(p)}
+						row := listed{meta: st.cachedProjectMeta(id, p)}
 						json.Unmarshal(row.meta, &row)
 						rows = append(rows, row)
 					}

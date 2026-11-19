@@ -10,6 +10,7 @@ import { acquireResources, collaborative, editingStatus, forgetResources, heldTo
 import { adoptShared, flushProject, project } from './project';
 import { versionShown, versionView } from './version-view';
 import { savedVersionBase } from '../projects/versions';
+import { deviceLabel } from './project-lease';
 
 let started = false, active: string | null = null, activeGeneration = -1;
 let controller: AbortController | null = null;
@@ -133,7 +134,7 @@ async function follow(id: string, signal: AbortSignal) {
   while (!signal.aborted) {
     try {
       await joinProject(id);
-      const response = await fetch(`/api/projects/${encodeURIComponent(id)}/collaboration/events`, {
+      const response = await fetch(`/api/projects/${encodeURIComponent(id)}/collaboration/events?label=${encodeURIComponent(deviceLabel())}`, {
         signal, cache: 'no-store', headers: { 'X-Orca-Session': sessionId, Accept: 'text/event-stream' },
       });
       if (!response.ok || !response.body || !response.headers.get('Content-Type')?.includes('text/event-stream')) throw new Error('Shared updates are unavailable.');
@@ -177,7 +178,9 @@ export function startCollaboration() {
   if (started || !collaborative()) return;
   started = true;
   setEditGuard(checkEdit);
+  let suspended = false;
   const changed = () => {
+    if (suspended) return;
     const { context, value } = project.get();
     if (versionShown() && context.id === active) return;
     const id = context.revision > 0 && !['blank', 'opening', 'missing', 'deleted'].includes(value) ? context.id : null;
@@ -210,5 +213,19 @@ export function startCollaboration() {
       if (id === active) updateEditingStatus({ connected: false, error: `Editing locks were lost. Reload before continuing. ${String(error)}` });
     });
   }, 10000);
-  window.addEventListener('pagehide', () => { if (active) void finishEditing().catch(() => {}); });
+  window.addEventListener('pagehide', () => {
+    suspended = true;
+    if (active) void finishEditing().catch(() => {});
+    controller?.abort(); controller = null;
+    updateEditingStatus({ connected: false });
+  });
+  window.addEventListener('pageshow', () => {
+    if (!suspended) return;
+    suspended = false;
+    changed();
+    if (active && !controller) {
+      controller = new AbortController();
+      void follow(active, controller.signal);
+    }
+  });
 }
