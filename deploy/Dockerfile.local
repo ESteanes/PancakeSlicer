@@ -1,0 +1,59 @@
+# Rebuild the frontend and Go server while reusing the published engine.
+# Run from the repository root; the final '.' supplies the build context:
+#   docker build -f deploy/Dockerfile.local -t pancakeslicer:local .
+# Repeat -t for additional tags; add --platform linux/amd64 for an x86-64 deployment.
+# Update the running deployment on the host where the image is available:
+#   PANCAKE_IMAGE=pancakeslicer:local docker compose -f deploy/docker-compose.tailscale.yml up -d
+
+ARG PANCAKE_BASE_IMAGE=zimengxiong/pancakeslicer:0.4.9@sha256:b78850886013b9b851bad364e3fafa94669bb0a186ba579b9b45645210779b50
+
+FROM ${PANCAKE_BASE_IMAGE} AS runtime
+
+FROM --platform=$BUILDPLATFORM node:26-bookworm-slim@sha256:5df79989ed685e09f0a98019db4cebfb22fb9df1a53c0161664a011f7ff6b0f1 AS web
+WORKDIR /src/web
+COPY web/package.json web/package-lock.json ./
+RUN --mount=type=cache,target=/root/.npm npm ci
+COPY web/ ./
+COPY server/*.json /src/server/
+COPY --from=runtime /app/engine/resources/ /src/engine/resources/
+COPY engine/resources/images/ /src/engine/resources/images/
+RUN npm run build
+COPY LICENSE ./dist/licence.txt
+COPY --from=runtime /app/web/third-party-licences.txt /tmp/upstream-licences.txt
+RUN cat /tmp/upstream-licences.txt >> dist/third-party-licences.txt && rm -f dist/third-party-licences.txt.br dist/third-party-licences.txt.gz dist/bundle-report.json
+
+FROM --platform=$BUILDPLATFORM golang:1.27.2-bookworm@sha256:5cf287a799e6b94384bad13d16b14904c531f51ba65792237e122ce42b392f61 AS server
+ARG TARGETOS
+ARG TARGETARCH
+ARG REVISION=local
+ENV GOTOOLCHAIN=local
+WORKDIR /src
+COPY server/ ./server/
+COPY web/ ./web/
+COPY engine/resources/images/ ./engine/resources/images/
+COPY deploy/Dockerfile.local deploy/Dockerfile.local.dockerignore deploy/package-local.mjs ./deploy/
+COPY LICENSE ./
+COPY --from=runtime /app/engine/source.tar.gz ./upstream-source.tar.gz
+RUN mkdir -p /out && tar --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner -czf /out/source.tar.gz server web engine deploy LICENSE upstream-source.tar.gz
+WORKDIR /src/server
+RUN --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=0 GOOS="$TARGETOS" GOARCH="$TARGETARCH" go build -trimpath -mod=vendor -buildvcs=false \
+    -ldflags="-s -w -X main.buildRevision=$REVISION -X main.buildImage=pancakeslicer:local -X main.buildSourceSHA256=$(sha256sum /out/source.tar.gz | cut -d' ' -f1)" \
+    -o /out/orca-webapp-server .
+
+FROM web AS package
+ARG REVISION=local
+ARG PANCAKE_BASE_IMAGE
+COPY --from=runtime /app/engine/COMPONENTS.json /out/engine/COMPONENTS.json
+COPY --from=server /out/ /out/engine/
+COPY server/schemas.json /out/engine/schemas.json
+COPY deploy/package-local.mjs /tmp/package-local.mjs
+RUN node /tmp/package-local.mjs /src/web/dist /out/engine "$REVISION" "$PANCAKE_BASE_IMAGE"
+
+FROM runtime
+ARG REVISION=local
+ARG PANCAKE_BASE_IMAGE
+LABEL org.opencontainers.image.version="local" org.opencontainers.image.revision="${REVISION}" org.opencontainers.image.base.name="${PANCAKE_BASE_IMAGE}"
+COPY --from=package /src/web/dist/ /app/web-local/
+COPY --from=package /out/engine/ /app/engine/
+ENV ORCA_WEB_STATIC=/app/web-local ORCA_BUILD_REVISION=${REVISION} ORCA_BUILD_IMAGE=pancakeslicer:local ORCA_BUILD_SOURCE_SHA256= ORCA_WEB_SOURCE_URL=

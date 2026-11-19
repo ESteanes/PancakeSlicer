@@ -24,7 +24,7 @@ x-hardening: &hardening
 services:
   pancakeslicer:
     <<: *hardening
-    image: zimengxiong/pancakeslicer:latest@sha256:b78850886013b9b851bad364e3fafa94669bb0a186ba579b9b45645210779b50
+    image: "${PANCAKE_IMAGE:-zimengxiong/pancakeslicer:latest@sha256:b78850886013b9b851bad364e3fafa94669bb0a186ba579b9b45645210779b50}"
     user: "65532:65532"
     init: true
     environment:
