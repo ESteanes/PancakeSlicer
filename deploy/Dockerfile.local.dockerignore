@@ -1,6 +1,8 @@
 **
 !web/
 !web/**
+!desktop/
+!desktop/package.json
 !server/
 !server/*.go
 !server/*.json
