@@ -2,9 +2,11 @@ import type { LibraryRecords } from '../profiles/records';
 import type { DemoCatalog } from './resolver';
 import { NO_ENGINE, SAMPLE_JOB } from './config';
 import { GITHUB_URL } from '../build-info';
+import { spoolError, type Spool } from '../filament-inventory/model';
 type Row = Record<string, any>;
 interface Seed { library: LibraryRecords; preferences: Row; session: Row; printCatalog: Row[]; projects: Row[] }
 interface DemoState { library: LibraryRecords; preferences: Row; session: Row; projects: Record<string, Row>; drafts: Record<string, Row>;
+  inventory?: Row; inventoryOperations?: Record<string, { input: string; response: Row }>;
   assets: Record<string, string>; versions: Record<string, Row[]>; folders: Row[]; folderRevision: number }
 type Resolve = (library: LibraryRecords, body: unknown, options: unknown, catalog: DemoCatalog) => Promise<unknown>;
 let hooks: { notice?(code: 'demo_storage_full'): void; resolve?: Resolve; slotOffer?: Resolve } = {};
@@ -145,6 +147,25 @@ async function handle(request: Request): Promise<Response> {
     if (method === 'GET') return json(s[path]);
     const input = await body(request); s[path] = { revision: input.expectedRevision + 1, document: input.document }; save(s);
     return json({ revision: s[path].revision, operationId: input.operationId });
+  }
+  if (path === 'filament-inventory') {
+    const inventory = s.inventory ?? { revision: 0, document: { spools: [] } };
+    if (method === 'GET') return json(inventory);
+    if (method !== 'PUT') return json({ error: 'Method not allowed.' }, 405);
+    const input = await body(request), spools = input.document?.spools as Spool[] | undefined;
+    if (!input.operationId || typeof input.operationId !== 'string' || input.operationId.length > 200) return json({ error: 'A stable operationId is required.' }, 400);
+    if (!Array.isArray(spools) || spools.length > 10000 || spools.some(spool => !spool || spoolError(spool)) || new Set(spools.map(spool => spool.id)).size !== spools.length) return json({ error: 'Invalid filament inventory.' }, 400);
+    const receipt = s.inventoryOperations?.[input.operationId], encoded = JSON.stringify(input);
+    if (receipt) return receipt.input === encoded ? json(receipt.response) : json({ error: 'This operationId was used for different data.', code: 'operation_conflict' }, 409);
+    if (input.expectedRevision !== inventory.revision) return json({ error: 'Inventory changed in another window.', code: 'revision_conflict', ...inventory }, 409);
+    const response = { revision: inventory.revision + 1, operationId: input.operationId };
+    s.inventory = { revision: response.revision, document: input.document };
+    s.inventoryOperations ??= {};
+    s.inventoryOperations[input.operationId] = { input: encoded, response };
+    const ids = Object.keys(s.inventoryOperations);
+    for (const id of ids.slice(0, Math.max(0, ids.length - 100))) delete s.inventoryOperations[id];
+    save(s);
+    return json(response);
   }
   if (path.startsWith('assets/') || path.startsWith('blobs/')) {
     const key = path.slice(path.indexOf('/') + 1); if (key === 'missing') return json({ missing: [] });

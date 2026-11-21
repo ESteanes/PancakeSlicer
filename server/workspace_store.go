@@ -713,7 +713,7 @@ func (st *workspaceStore) register(mux *http.ServeMux) {
 	})
 	mux.HandleFunc("PUT /api/drafts/{id}", st.putDraft)
 	mux.HandleFunc("DELETE /api/drafts/{id}", st.deleteDraft)
-	for _, value := range []struct{ kind, method string }{{"session", "PATCH"}, {"preferences", "PUT"}} {
+	for _, value := range []struct{ kind, method string }{{"session", "PATCH"}, {"preferences", "PUT"}, {"filament-inventory", "PUT"}} {
 		kind := value.kind
 		mux.HandleFunc("GET /api/"+value.kind, func(w http.ResponseWriter, r *http.Request) {
 			st.view(w, func(d *workspaceData) {
@@ -944,6 +944,14 @@ func (st *workspaceStore) putValue(w http.ResponseWriter, r *http.Request, kind 
 	if len(in.Document) == 0 {
 		workspaceFailure(w, 400, "invalid_document", "document is required.", "keep_draft", 0)
 		return
+	}
+	if kind == "filament-inventory" {
+		document, err := filamentInventoryDocument(in.Document)
+		if err != nil {
+			workspaceFailure(w, 400, "invalid_inventory", err.Error(), "correct_inventory", 0)
+			return
+		}
+		in.Document = document
 	}
 	digest := workspaceDigest([]any{kind, in})
 	st.locked(w, func(d *workspaceData) {

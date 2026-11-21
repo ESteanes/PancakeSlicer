@@ -84,6 +84,7 @@ function PrinterSection() {
       <div className="rail-printer-controls"><PresetCombo type="machine"/>{ready && <PlateTypeField bare/>}<RecordProblem kind="machine" id={name}/></div>
     </div>
     {ready && <SlotRows/>}
+    {ready && <button type="button" className="btn-ghost" onClick={() => setState({ appDialog: 'inventory' })}>Filament inventory</button>}
   </RailSection>;
 }
 const noticeActions = { use: () => projectSlots.send({ type: 'USE' }), keep: () => projectSlots.send({ type: 'KEEP' }), dismiss: () => projectSlots.send({ type: 'DISMISS' }) };

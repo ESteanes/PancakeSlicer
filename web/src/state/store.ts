@@ -232,7 +232,7 @@ export interface State {
   processVariant: { layerHeight: number } | null;
   projectMaterials: { colours: string[]; matrix: number[] | null; multiplier: number | null; builds?: { object: number; instance: number }[] } | null;
   flushDialog: boolean;
-  appDialog: 'about' | 'preferences' | 'shortcuts' | 'send' | 'setup' | 'plate' | 'clone' | 'simplify' | 'objectTable' | 'createPrinter' | 'mixed' | 'what' | null;
+  appDialog: 'about' | 'preferences' | 'shortcuts' | 'send' | 'setup' | 'plate' | 'clone' | 'simplify' | 'inventory' | 'objectTable' | 'createPrinter' | 'mixed' | 'what' | null;
   calibDialog: CalibMenu | null;
   printerConnections: PrinterConnections;
   events: LayerEvent[];
