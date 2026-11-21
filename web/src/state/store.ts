@@ -240,7 +240,7 @@ export interface State {
   projectMaterials: { colours: string[]; matrix: number[] | null; multiplier: number | null; builds?: { object: number; instance: number }[] } | null;
   flush: { matrix: number[] | null; multiplier: number | null };
   flushDialog: boolean;
-  appDialog: 'about' | 'preferences' | 'shortcuts' | 'send' | 'setup' | 'plate' | 'clone' | 'simplify' | 'filaments' | 'objectTable' | 'createPrinter' | 'mixed' | 'what' | null;
+  appDialog: 'about' | 'preferences' | 'shortcuts' | 'send' | 'setup' | 'plate' | 'clone' | 'simplify' | 'filaments' | 'inventory' | 'objectTable' | 'createPrinter' | 'mixed' | 'what' | null;
   filamentsToUse: string[] | null;
   calibDialog: CalibMenu | null;
   printerConnections: PrinterConnections;

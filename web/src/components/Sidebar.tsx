@@ -79,6 +79,7 @@ function FilamentSection() {
   </>}>
     {slots.map((_name, i) => <div key={i} className="rail-row rail-slot"><PresetCombo type="filament" slot={i}/>
       {slots.length > 1 && <button type="button" className="icon-btn rail-slot-remove" aria-label={`Remove filament slot ${i + 1}`} onClick={() => removeSlot(i)}><Glyph name="close" size={14}/></button>}</div>)}
+    <button type="button" className="btn-ghost" onClick={() => setState({ appDialog: 'inventory' })}>Filament inventory</button>
   </RailSection>;
 }
 const DETAIL = [['simple', 'Simple'], ['advanced', 'Advanced'], ['develop', 'Expert']] as const;
