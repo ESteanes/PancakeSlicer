@@ -418,6 +418,14 @@ func (c *Catalog) Job(lib *Library, in Request) (*SliceConfig, error) {
 				claim(k, v, "project")
 			}
 		}
+		for _, t := range []string{"nozzle_temperature", "nozzle_temperature_initial_layer"} {
+			if raw := FirstConfigText(config[t]); raw != "" {
+				temp, parseErr := strconv.ParseFloat(raw, 64)
+				if parseErr != nil || temp < 0 || temp > 500 {
+					return nil, fmt.Errorf("%s: nozzle temperature %s °C is out of safe range (0–500 °C).", f.Name, raw)
+				}
+			}
+		}
 		filamentConfigs = append(filamentConfigs, config)
 	}
 	filamentConfig := map[string]json.RawMessage{}
