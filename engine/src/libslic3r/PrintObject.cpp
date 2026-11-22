@@ -1211,10 +1211,48 @@ SupportMaterialStyle PrintObject::tree_default_style() const
     return check_object_layers_fixed(this->slicing_parameters(), profile) ? smsTreeOrganic : smsTreeSlim;
 }
 
-void PrintObject::generate_support_material(bool with_belt_brim)
+Polygons PrintObject::support_neighbor_footprint(coordf_t bottom_z, coordf_t top_z, coord_t gap_xy) const
+{
+    return m_support_neighbors ? m_support_neighbors->polygons(*this, bottom_z, top_z, gap_xy) : Polygons{};
+}
+
+void PrintObject::trim_support_paths_by_neighbors(const SupportNeighborFootprints &neighbors)
+{
+    if (neighbors.empty() || m_support_layers.empty())
+        return;
+
+    const coord_t bead_radius = std::max({support_material_flow(this).scaled_width(),
+        support_material_interface_flow(this).scaled_width(), support_material_1st_layer_flow(this).scaled_width()}) / 2;
+    const coord_t clearance = std::max(scaled<coord_t>(m_config.support_object_xy_distance.value),
+                                       bead_radius + coord_t(SCALED_EPSILON));
+    // Raft expansion and tree smoothing also produce paths outside their routing masks.
+    tbb::parallel_for(size_t(0), m_support_layers.size(), [&](size_t i) {
+        this->throw_if_canceled();
+        SupportLayer &layer = *m_support_layers[i];
+        if (layer.support_fills.empty())
+            return;
+        const Polygons footprint = neighbors.polygons(*this, layer.bottom_z(), layer.print_z, clearance);
+        if (footprint.empty())
+            return;
+        const ExPolygons mask = union_ex(footprint);
+        Nonplanar::clip_extrusions(layer.support_fills, mask, get_extents(mask));
+        layer.support_islands = diff_ex(layer.support_islands, mask);
+        if (!layer.lslices.empty()) {
+            layer.lslices = diff_ex(layer.lslices, mask);
+            layer.lslices_bboxes.clear();
+            for (const ExPolygon &slice : layer.lslices)
+                layer.lslices_bboxes.push_back(get_extents(slice));
+        }
+    });
+}
+
+void PrintObject::generate_support_material(bool with_belt_brim, const SupportNeighborFootprints *neighbors)
 {
     if (this->set_started(posSupportMaterial)) {
+        m_support_neighbors = neighbors && !neighbors->empty() ? neighbors : nullptr;
+        ScopeGuard clear_neighbors([this] { m_support_neighbors = nullptr; });
         this->clear_support_layers();
+        m_tree_support_preview_cache.reset();
         NonplanarSupportView nonplanar_support_view(m_layers);
         auto apply_auto_support = [this](bool critical_only, SupportMaterialStyle style) {
             if (!m_auto_support_applied) {
@@ -1315,6 +1353,8 @@ void PrintObject::generate_support_material(bool with_belt_brim)
             }
             if (m_multiplanar)
                 Nonplanar::clear_route_support(*this, *m_multiplanar);
+            if (m_support_neighbors)
+                this->trim_support_paths_by_neighbors(*m_support_neighbors);
             if (m_auto_support_applied) {
                 double volume = 0.;
                 for (const SupportLayer *layer : m_support_layers)
