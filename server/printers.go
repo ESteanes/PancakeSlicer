@@ -25,6 +25,7 @@ import (
 	"sync/atomic"
 	"time"
 	"unicode"
+	"unicode/utf8"
 )
 
 type PrinterConfig struct {
@@ -86,7 +87,7 @@ func (p *PrinterConfig) view() ConnectionView {
 var bambuSerial = regexp.MustCompile(`^[A-Za-z0-9]{6,32}$`)
 
 func (p *PrinterConfig) validate(resources string) error {
-	if len(p.Name) > 200 || strings.IndexFunc(p.Name, unicode.IsControl) >= 0 {
+	if utf8.RuneCountInString(p.Name) > 200 || strings.IndexFunc(p.Name, unicode.IsControl) >= 0 {
 		return errors.New("Printer name must be 200 characters or fewer (with no control characters).")
 	}
 	if p.WebUI != "" {

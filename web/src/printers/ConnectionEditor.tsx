@@ -3,7 +3,7 @@ import { useMachine } from '../flow/fsm';
 import { connectionEditFor, type ConnectionEditContext, type ConnectionOp } from '../flow/connection-edit';
 import { confirmDialog } from '../components/Ask';
 import { Dropdown } from '../components/Dropdown';
-import { getState, toast, useStore, type State } from '../state/store';
+import { getState, setState, toast, useStore, type State } from '../state/store';
 import { recordOf, selectionValues, useAskedValues, type ProfileValues } from '../profiles/view';
 import { loadedPrinterVendors, printerCatalog, type CatalogModel } from '../profiles/catalog-reads';
 import type { PrinterRecord } from '../profiles/records';
@@ -13,6 +13,8 @@ import {
 } from './connections';
 import { printerModel } from './capabilities';
 import './printers.css';
+import { openLibrary } from '../navigation';
+import { restoreProfile } from '../profiles/transactions';
 import { addPrinterOnVariant } from '../profiles/catalog-add';
 
 const sentence = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
@@ -38,7 +40,29 @@ function foundModel(d: Discovered): CatalogModel | undefined {
   return undefined;
 }
 
-export function ConnectionEditor({ printer, name, onSaved }: { printer: string; name: string; onSaved?(): void }) {
+type EditorProps = { printer: string; name: string; onSaved?(): void };
+
+export function ConnectionEditor(props: EditorProps) {
+  const record = useStore((s) => printerOf(s, props.printer));
+  const [restoring, setRestoring] = useState(false);
+  const [error, setError] = useState('');
+  if (!record) return <button type="button" className="btn" onClick={() => {
+    setState({ appDialog: null });
+    openLibrary('machine');
+  }}>Manage printers</button>;
+  if (record.archived) return <div className="connection-editor">
+    <button type="button" className="btn" disabled={restoring} onClick={async () => {
+      setRestoring(true); setError('');
+      try { await restoreProfile('machine', record); }
+      catch (e) { setError(errorText(e)); }
+      finally { setRestoring(false); }
+    }}>Restore {record.name}</button>
+    {error && <div role="alert" className="warning-text">{error}</div>}
+  </div>;
+  return <LiveConnectionEditor key={record.id} {...props} />;
+}
+
+function LiveConnectionEditor({ printer, name, onSaved }: EditorProps) {
   const saved = useStore((s) => connectionOf(s.printerConnections, printer));
   const status = useStore((s) => s.printerConnections.status[printer]);
   const all = useStore((s) => s.printerConnections);
