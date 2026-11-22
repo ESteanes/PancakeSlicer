@@ -8,11 +8,25 @@ export interface Spool {
   capacityGrams: number;
   remainingGrams: number;
   location: string;
+  diameterMm?: number;
+  densityGramsCm3?: number;
 }
 
 export const grams = (weight: number) => `${weight.toLocaleString(undefined, { maximumFractionDigits: 1 })} g`;
+export const metres = (length: number) => `${length.toLocaleString(undefined, { maximumFractionDigits: 2 })} m`;
 export const materialKey = (value: string) => value.trim().toUpperCase();
 export const stockStatus = (spool: Spool) => spool.remainingGrams === 0 ? 'empty' : spool.remainingGrams <= spool.capacityGrams * 0.1 ? 'low' : 'available';
+
+type Dimensions = Pick<Spool, 'diameterMm' | 'densityGramsCm3'>;
+export function dimensionError(spool: Dimensions): string | null {
+  if (spool.diameterMm !== undefined && (!Number.isFinite(spool.diameterMm) || spool.diameterMm <= 0 || spool.diameterMm > 10)) return 'Diameter must be greater than zero and no more than 10 mm.';
+  if (spool.densityGramsCm3 !== undefined && (!Number.isFinite(spool.densityGramsCm3) || spool.densityGramsCm3 <= 0 || spool.densityGramsCm3 > 30)) return 'Density must be greater than zero and no more than 30 g/cm³.';
+  return null;
+}
+export function gramsPerMetre(spool: Dimensions): number | null {
+  if (dimensionError(spool) || spool.diameterMm === undefined || spool.densityGramsCm3 === undefined) return null;
+  return Math.PI * (spool.diameterMm / 2) ** 2 * spool.densityGramsCm3;
+}
 
 export interface FilamentUsage { slot: number; grams: number }
 export interface SpoolAssignment { slot: number; spoolId: string }
@@ -50,6 +64,6 @@ export function spoolError(spool: Spool): string | null {
   if (typeof spool.colour !== 'string' || !/^#[\da-f]{6}$/i.test(spool.colour)) return 'Enter a 6-digit HEX colour, such as #FF6B00.';
   if (!Number.isFinite(spool.capacityGrams) || spool.capacityGrams <= 0 || spool.capacityGrams > 1000000) return 'Capacity must be greater than zero and no more than 1,000,000 g.';
   if (!Number.isFinite(spool.remainingGrams) || spool.remainingGrams < 0 || spool.remainingGrams > spool.capacityGrams) return 'Remaining weight must be between zero and the spool capacity.';
-  return null;
+  return dimensionError(spool);
 }
 

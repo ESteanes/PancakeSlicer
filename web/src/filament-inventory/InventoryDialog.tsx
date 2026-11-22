@@ -3,13 +3,27 @@ import { Modal, ModalBody, ModalFooter, ModalTitle } from '../components/Modal';
 import { Dropdown } from '../components/Dropdown';
 import { FILAMENT_PALETTE } from '../components/filament-palette';
 import { projectId } from '../persist/identity';
+import { canExport } from '../actions';
+import { setState, useStore } from '../state/store';
 import { loadInventory, retryInventorySave, saveInventory, useInventory } from './store';
-import { grams, spoolError, stockStatus, type Spool } from './model';
+import { dimensionError, grams, gramsPerMetre, metres, sliceFilamentUsage, spoolError, stockStatus, type Spool } from './model';
 import './inventory.css';
 
 const MATERIALS = ['PLA', 'PLA+', 'PETG', 'ABS', 'ASA', 'TPU', 'PA', 'PC', 'PVA', 'HIPS'];
 const STATUS = { available: 'In stock', low: 'Low stock', empty: 'Empty' };
-type Selection = { kind: 'edit' | 'usage' | 'delete'; spool: Spool; revision: number } | { kind: 'add'; revision: number };
+type Selection = { kind: 'edit' | 'usage' | 'remaining' | 'delete'; spool: Spool; revision: number } | { kind: 'add'; revision: number };
+
+function LengthFields({ diameter, density, setDiameter, setDensity, required = false }: {
+  diameter: string; density: string; setDiameter(value: string): void; setDensity(value: string): void; required?: boolean;
+}) {
+  return <>
+    <div className="inventory-form-pair">
+      <label className="inventory-field"><span>Filament diameter (mm)</span><input className="text" type="number" min="0" max="10" step="any" required={required} value={diameter} onChange={(event) => setDiameter(event.target.value)} /></label>
+      <label className="inventory-field"><span>Material density (g/cm³)</span><input className="text" type="number" min="0" max="30" step="any" required={required} value={density} onChange={(event) => setDensity(event.target.value)} /></label>
+    </div>
+    <p className="inventory-hint">Use the diameter and density from the filament manufacturer or its slicer profile. These are saved with the spool to estimate weight from length.</p>
+  </>;
+}
 
 function Recovery({ recovered }: { recovered?(): void }) {
   const inventory = useInventory();
@@ -29,6 +43,7 @@ function SpoolEditor({ spool, revision, close }: { spool?: Spool; revision: numb
     id: projectId(), name: '', brand: '', material: 'PLA', colour: '#FFFFFF', colourName: 'White', capacityGrams: 1000, remainingGrams: 1000, location: '',
   });
   const [capacity, setCapacity] = useState(String(draft.capacityGrams)), [remaining, setRemaining] = useState(String(draft.remainingGrams));
+  const [diameter, setDiameter] = useState(String(draft.diameterMm ?? '')), [density, setDensity] = useState(String(draft.densityGramsCm3 ?? ''));
   const [error, setError] = useState<string | null>(null);
   const busy = inventory.state === 'saving' || inventory.state === 'loading', locked = inventory.state !== 'ready';
   const dismiss = () => { if (!busy) close(); };
@@ -39,7 +54,8 @@ function SpoolEditor({ spool, revision, close }: { spool?: Spool; revision: numb
   </label>;
   const submit = async () => {
     const next = { ...draft, name: draft.name.trim(), brand: draft.brand.trim(), material: draft.material.trim().toUpperCase(), colour: draft.colour.toUpperCase(),
-      colourName: draft.colourName.trim(), location: draft.location.trim(), capacityGrams: Number(capacity), remainingGrams: Number(remaining) };
+      colourName: draft.colourName.trim(), location: draft.location.trim(), capacityGrams: Number(capacity), remainingGrams: Number(remaining),
+      diameterMm: diameter.trim() ? Number(diameter) : undefined, densityGramsCm3: density.trim() ? Number(density) : undefined };
     const invalid = !capacity.trim() || !remaining.trim() ? 'Enter capacity and remaining weight in grams.' : spoolError(next);
     if (invalid) { setError(invalid); return; }
     setError(null);
@@ -65,14 +81,17 @@ function SpoolEditor({ spool, revision, close }: { spool?: Spool; revision: numb
           <div className="inventory-palette" role="group" aria-label="Common filament colours">{FILAMENT_PALETTE.map((colour) => <button key={colour.hex} type="button" className="inventory-swatch" style={{ backgroundColor: colour.hex }} aria-label={colour.name} aria-pressed={draft.colour.toUpperCase() === colour.hex.toUpperCase()}
             onClick={() => setDraft({ ...draft, colour: colour.hex, colourName: colour.name })} />)}</div>
           <div className="inventory-form-pair">
-            <label className="inventory-field"><span>Full spool weight (g)</span><input className="text" type="number" required min="0.1" max="1000000" step="0.1" value={capacity} onChange={(event) => {
+            <label className="inventory-field"><span>Full spool weight (g)</span><input className="text" type="number" required min="0.1" max="1000000" step="any" value={capacity} onChange={(event) => {
               const next = event.target.value;
               if (!spool && remaining === capacity) setRemaining(next);
               setCapacity(next);
             }} /></label>
-            <label className="inventory-field"><span>Remaining filament (g)</span><input className="text" type="number" required min="0" max={Number(capacity) || 1000000} step="0.1" value={remaining} onChange={(event) => setRemaining(event.target.value)} /></label>
+            <label className="inventory-field"><span>Remaining filament (g)</span><input className="text" type="number" required min="0" max={Number(capacity) || 1000000} step="any" value={remaining} onChange={(event) => setRemaining(event.target.value)} /></label>
           </div>
           <p className="inventory-hint">Enter filament weight only, excluding the empty spool. You can correct the remaining weight here after weighing it.</p>
+          <details><summary>Length conversion (optional)</summary><div className="inventory-fields">
+            <LengthFields diameter={diameter} density={density} setDiameter={setDiameter} setDensity={setDensity} />
+          </div></details>
           {field('location', 'Storage location (optional)')}
         </fieldset>
         {error && <p className="modal-error" id={errorId} role="alert">{error}</p>}
@@ -83,31 +102,55 @@ function SpoolEditor({ spool, revision, close }: { spool?: Spool; revision: numb
   </Modal>;
 }
 
-function UsageDialog({ spool, revision, close }: { spool: Spool; revision: number; close(): void }) {
+function QuantityDialog({ spool, revision, mode, close }: { spool: Spool; revision: number; mode: 'usage' | 'remaining'; close(): void }) {
   const inventory = useInventory(), errorId = useId();
-  const [amount, setAmount] = useState(''), [error, setError] = useState<string | null>(null);
-  const used = Number(amount), valid = amount.trim() !== '' && Number.isFinite(used) && used > 0 && used <= spool.remainingGrams;
-  const after = Math.round((spool.remainingGrams - used) * 10) / 10;
+  const [amount, setAmount] = useState(mode === 'remaining' ? String(spool.remainingGrams) : ''), [error, setError] = useState<string | null>(null);
+  const [unit, setUnit] = useState<'g' | 'm'>('g');
+  const [diameter, setDiameter] = useState(String(spool.diameterMm ?? 1.75)), [density, setDensity] = useState(String(spool.densityGramsCm3 ?? ''));
+  const dimensions = { diameterMm: Number(diameter), densityGramsCm3: Number(density) }, rate = gramsPerMetre(dimensions);
+  const amountGrams = Math.round(Number(amount) * (unit === 'm' ? rate ?? NaN : 1) * 1000000) / 1000000;
+  const limit = mode === 'usage' ? spool.remainingGrams : spool.capacityGrams;
+  const valid = amount.trim() !== '' && Number(amount) >= 0 && Number.isFinite(amountGrams) && (mode === 'usage' ? amountGrams > 0 : amountGrams >= 0) && amountGrams <= limit;
+  const after = mode === 'usage' ? Math.round((spool.remainingGrams - amountGrams) * 1000000) / 1000000 : amountGrams;
+  const title = mode === 'usage' ? 'Record usage' : 'Correct remaining filament';
   const busy = inventory.state === 'saving' || inventory.state === 'loading', locked = inventory.state !== 'ready';
   const dismiss = () => { if (!busy) close(); };
-  const submit = async () => {
-    if (!valid) { setError(`Enter a weight greater than zero and no more than ${grams(spool.remainingGrams)}.`); return; }
-    setError(null);
-    if (await saveInventory(inventory.document.spools.map((item) => item.id === spool.id ? { ...item, remainingGrams: after } : item), revision)) close();
+  const changeUnit = (next: string) => {
+    if (next !== 'g' && next !== 'm' || next === unit) return;
+    if (amount.trim() && Number.isFinite(Number(amount)) && rate) setAmount(String(Number((Number(amount) * (next === 'g' ? rate : 1 / rate)).toPrecision(15))));
+    else setAmount('');
+    setUnit(next); setError(null);
   };
-  return <Modal size="s" label="Record filament usage" onClose={dismiss}>
-    <ModalTitle title="Record usage" onClose={dismiss} />
+  const submit = async () => {
+    if (unit === 'm' && !rate) { setError(dimensionError(dimensions) ?? 'Enter the filament diameter and material density to convert metres to grams.'); return; }
+    if (!valid) { setError(`Enter ${mode === 'usage' ? 'usage greater than zero' : 'a remaining amount of zero or more'}, up to ${grams(limit)}${unit === 'm' && rate ? ` (${metres(limit / rate)})` : ''}.`); return; }
+    const next = { ...spool, remainingGrams: after, ...(unit === 'm' ? dimensions : {}) };
+    const invalid = spoolError(next);
+    if (invalid) { setError(invalid); return; }
+    setError(null);
+    if (await saveInventory(inventory.document.spools.map((item) => item.id === spool.id ? next : item), revision)) close();
+  };
+  return <Modal size="m" label={title} onClose={dismiss}>
+    <ModalTitle title={title} onClose={dismiss} />
     <form onSubmit={(event) => { event.preventDefault(); void submit(); }}>
       <ModalBody>
         <p><strong>{spool.name}</strong> · {spool.material} · {spool.colourName}</p>
         <p>{grams(spool.remainingGrams)} remaining</p>
-        <label className="inventory-field"><span>Filament used (g)</span><input className="text" type="number" data-autofocus required min="0.1" max={spool.remainingGrams} step="0.1" value={amount} disabled={locked} aria-describedby={error ? errorId : undefined} onChange={(event) => setAmount(event.target.value)} /></label>
-        <p className="inventory-hint">Record the amount used by a completed print, including supports and waste. You can also record purging or failed prints here.</p>
-        {valid && <p role="status">Remaining after use: <strong>{grams(after)}</strong></p>}
+        <fieldset className="inventory-fields" disabled={locked}>
+          <div className="inventory-form-pair">
+            <label className="inventory-field"><span>{mode === 'usage' ? 'Filament used' : 'Measured remaining filament'} ({unit})</span><input className="text" type="number" data-autofocus required min="0" max={unit === 'g' ? limit : undefined} step="any" value={amount} aria-describedby={error ? errorId : undefined} onChange={(event) => setAmount(event.target.value)} /></label>
+            <div className="inventory-field"><span>Unit</span><Dropdown aria-label="Filament quantity unit" value={unit} onValueChange={changeUnit} disabled={locked} options={[{ value: 'g', label: 'Weight (g)' }, { value: 'm', label: 'Length (m)' }]} /></div>
+          </div>
+          {unit === 'm' && <LengthFields diameter={diameter} density={density} setDiameter={setDiameter} setDensity={setDensity} required />}
+        </fieldset>
+        <p className="inventory-hint">{mode === 'usage'
+          ? 'Record a print started on the printer, including exported G-code, or enter purging and failed-print waste. No active slice or printer connection is needed. Include supports and waste; do not also record the same print with Record print.'
+          : 'Replace the saved amount with your measurement. Enter filament only, excluding the empty spool. This can increase or decrease the remaining stock.'}</p>
+        {valid && <p role="status">{unit === 'm' && <>Equivalent {mode === 'usage' ? 'usage' : 'remaining weight'}: <strong>{grams(amountGrams)}</strong>. </>}Remaining after {mode === 'usage' ? 'use' : 'correction'}: <strong>{grams(after)}</strong>{rate && <> (about {metres(after / rate)})</>}</p>}
         {error && <p className="modal-error" id={errorId} role="alert">{error}</p>}
         <Recovery recovered={close} />
       </ModalBody>
-      <ModalFooter><button type="button" className="btn" disabled={busy} onClick={close}>Cancel</button><button type="submit" className="btn-primary" disabled={locked}>{inventory.state === 'saving' ? 'Saving…' : 'Record usage'}</button></ModalFooter>
+      <ModalFooter><button type="button" className="btn" disabled={busy} onClick={close}>Cancel</button><button type="submit" className="btn-primary" disabled={locked}>{inventory.state === 'saving' ? 'Saving…' : mode === 'usage' ? 'Record usage' : 'Save remaining amount'}</button></ModalFooter>
     </form>
   </Modal>;
 }
@@ -124,6 +167,7 @@ function DeleteDialog({ spool, revision, close }: { spool: Spool; revision: numb
 
 export default function InventoryDialog({ close }: { close(): void }) {
   const inventory = useInventory();
+  const recordEnabled = useStore((s) => canExport(s) && !s.job.calib && !!sliceFilamentUsage(s.job.status?.record));
   const [query, setQuery] = useState(''), [material, setMaterial] = useState(''), [stock, setStock] = useState('all'), [colour, setColour] = useState('');
   const [selection, setSelection] = useState<Selection | null>(null);
   useEffect(() => { if (!inventory.pending) void loadInventory(); }, []);
@@ -136,13 +180,17 @@ export default function InventoryDialog({ close }: { close(): void }) {
     && (!material || spool.material === material) && (!colour || spool.colour.toUpperCase() === colour)
     && (stock === 'all' || stock === 'available' && spool.remainingGrams > 0 || stock === stockStatus(spool)))
     .sort((a, b) => Number(a.remainingGrams === 0) - Number(b.remainingGrams === 0) || a.name.localeCompare(b.name));
-  const choose = (kind: 'edit' | 'usage' | 'delete', spool: Spool) => setSelection({ kind, spool, revision: inventory.revision });
+  const choose = (kind: 'edit' | 'usage' | 'remaining' | 'delete', spool: Spool) => setSelection({ kind, spool, revision: inventory.revision });
   const dismiss = () => { if (!busy) close(); };
   return <>
     <Modal size="xl" className="inventory-dialog" label="Filament inventory" onClose={dismiss}>
       <ModalTitle title="Filament inventory" onClose={dismiss} />
       <ModalBody>
         <p>Track your spools, available colours and remaining filament. Record usage after printing to keep quantities up to date.</p>
+        <div className="inventory-fields">
+          <div className="inventory-actions"><button type="button" className="btn" disabled={!ready || !recordEnabled} onClick={() => setState({ appDialog: 'recordPrint' })}>Record sliced print</button></div>
+          <p className="inventory-hint">Use the current slice estimate after printing, including from an SD card or USB drive. For other prints, choose Record usage on each spool and enter the amount from the G-code or your measurement.</p>
+        </div>
         <Recovery />
         {inventory.loaded && <>
           <dl className="inventory-summary">
@@ -166,9 +214,10 @@ export default function InventoryDialog({ close }: { close(): void }) {
             <div className="inventory-spool-details"><h3>{spool.name}</h3><p>{[spool.brand, spool.material, spool.colourName].filter(Boolean).join(' · ')}</p>{spool.location && <p className="inventory-location">{spool.location}</p>}</div>
             <div className="inventory-weight"><div><strong>{grams(spool.remainingGrams)}</strong><span>{STATUS[stockStatus(spool)]}</span></div>
               <progress value={spool.remainingGrams} max={spool.capacityGrams} aria-label={`${spool.name}: ${grams(spool.remainingGrams)} of ${grams(spool.capacityGrams)} remaining`} />
-              <span>of {grams(spool.capacityGrams)} · {Math.round(spool.remainingGrams / spool.capacityGrams * 100)}% remaining</span>
+              <span>of {grams(spool.capacityGrams)} · {Math.round(spool.remainingGrams / spool.capacityGrams * 100)}% remaining{gramsPerMetre(spool) && <> · about {metres(spool.remainingGrams / gramsPerMetre(spool)!)}</>}</span>
             </div>
             <div className="inventory-spool-actions"><button type="button" className="btn" disabled={!ready || spool.remainingGrams === 0} aria-label={`Record usage for ${spool.name}`} onClick={() => choose('usage', spool)}>Record usage</button>
+              <button type="button" className="btn" disabled={!ready} aria-label={`Correct remaining filament for ${spool.name}`} onClick={() => choose('remaining', spool)}>Correct remaining</button>
               <button type="button" className="btn-ghost" disabled={!ready} aria-label={`Edit ${spool.name}`} onClick={() => choose('edit', spool)}>Edit</button>
               <button type="button" className="btn-ghost" disabled={!ready} aria-label={`Delete ${spool.name}`} onClick={() => choose('delete', spool)}>Delete</button></div>
           </li>)}</ul>
@@ -186,7 +235,7 @@ export default function InventoryDialog({ close }: { close(): void }) {
     </Modal>
     {selection?.kind === 'add' && <SpoolEditor revision={selection.revision} close={() => setSelection(null)} />}
     {selection?.kind === 'edit' && <SpoolEditor spool={selection.spool} revision={selection.revision} close={() => setSelection(null)} />}
-    {selection?.kind === 'usage' && <UsageDialog spool={selection.spool} revision={selection.revision} close={() => setSelection(null)} />}
+    {(selection?.kind === 'usage' || selection?.kind === 'remaining') && <QuantityDialog spool={selection.spool} revision={selection.revision} mode={selection.kind} close={() => setSelection(null)} />}
     {selection?.kind === 'delete' && <DeleteDialog spool={selection.spool} revision={selection.revision} close={() => setSelection(null)} />}
   </>;
 }

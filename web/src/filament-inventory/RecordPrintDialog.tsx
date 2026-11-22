@@ -74,6 +74,7 @@ export default function RecordPrintDialog({ close }: { close(): void }) {
     <ModalTitle title="Record print" onClose={dismiss} />
     <ModalBody>
       <p>Review the filament used by this plate. Confirm after printing to deduct the slice estimates from the selected spools.</p>
+      <p className="inventory-hint">This also records prints started from exported G-code on an SD card or USB drive. No printer connection is needed, and exporting alone does not deduct filament.</p>
       {loading && <p role="status">Loading inventory and print history…</p>}
       {recorded && <p className="inventory-print-success" role="status">Print recorded. Deducted {grams(recorded.usage.reduce((total, row) => total + row.grams, 0))} from inventory.</p>}
       {alreadyRecorded && !recorded && <p role="status">This slice already has {records.length} recorded print{records.length === 1 ? '' : 's'}. Record another only if you printed the plate again.</p>}

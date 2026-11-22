@@ -291,6 +291,7 @@ export function SliceNotification() {
         {close(exported)}
         <div className="notif-title">Exported successfully</div>
         <div className="notif-body">{job.exported}{'\n'}{fileUse(machine)}</div>
+        <div className="notif-body">After printing, record filament usage in <button type="button" className="notif-link" onClick={() => setState({ appDialog: 'inventory' })}>Filament inventory</button>.</div>
       </div>
     ),
     noteKey && !expired.has(noteKey) && !closed.has(noteKey) && (

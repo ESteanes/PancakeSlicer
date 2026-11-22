@@ -10,15 +10,17 @@ import (
 )
 
 type filamentSpool struct {
-	ID             string   `json:"id"`
-	Name           string   `json:"name"`
-	Brand          *string  `json:"brand"`
-	Material       string   `json:"material"`
-	Colour         string   `json:"colour"`
-	ColourName     string   `json:"colourName"`
-	CapacityGrams  *float64 `json:"capacityGrams"`
-	RemainingGrams *float64 `json:"remainingGrams"`
-	Location       *string  `json:"location"`
+	ID              string   `json:"id"`
+	Name            string   `json:"name"`
+	Brand           *string  `json:"brand"`
+	Material        string   `json:"material"`
+	Colour          string   `json:"colour"`
+	ColourName      string   `json:"colourName"`
+	CapacityGrams   *float64 `json:"capacityGrams"`
+	RemainingGrams  *float64 `json:"remainingGrams"`
+	Location        *string  `json:"location"`
+	DiameterMM      *float64 `json:"diameterMm,omitempty"`
+	DensityGramsCM3 *float64 `json:"densityGramsCm3,omitempty"`
 }
 
 var inventoryColour = regexp.MustCompile(`^#[0-9a-fA-F]{6}$`)
@@ -54,6 +56,12 @@ func filamentInventoryDocument(raw json.RawMessage) (json.RawMessage, error) {
 		capacity, remaining := *spool.CapacityGrams, *spool.RemainingGrams
 		if math.IsNaN(capacity) || math.IsInf(capacity, 0) || math.IsNaN(remaining) || math.IsInf(remaining, 0) || capacity <= 0 || capacity > 1000000 || remaining < 0 || remaining > capacity {
 			return nil, errors.New("Capacity must be greater than zero and no more than 1,000,000 g, and remaining weight must be between zero and capacity.")
+		}
+		if diameter := spool.DiameterMM; diameter != nil && (math.IsNaN(*diameter) || math.IsInf(*diameter, 0) || *diameter <= 0 || *diameter > 10) {
+			return nil, errors.New("Diameter must be greater than zero and no more than 10 mm.")
+		}
+		if density := spool.DensityGramsCM3; density != nil && (math.IsNaN(*density) || math.IsInf(*density, 0) || *density <= 0 || *density > 30) {
+			return nil, errors.New("Density must be greater than zero and no more than 30 g/cm³.")
 		}
 	}
 	return json.Marshal(doc)
