@@ -29,6 +29,7 @@ const WARNING_TEXTS: Record<string, ((p: Record<string, unknown>) => string) | n
   sublayer_walls_skipped: () => 'Sub-layer walls were skipped',
   atom_toolpath_note: () => 'Note from the imported toolpath',
   head_profile_fallback: () => "This printer's head shape isn't known, so a generic one was used for clearance",
+  object_path_conflict: (p) => `Toolpaths for ${p.first} and ${p.second} may overlap near Z ${n(p.height)} mm. Move the objects farther apart or merge parts that belong together.`,
   clearance_hits: (p) => `${n(p.moves)} moves would hit the printed part`,
   clearance_repaired: () => 'Curved moves were adjusted so the print head stays clear',
   clearance_repair_summary: () => 'Curved moves were adjusted so the print head stays clear',

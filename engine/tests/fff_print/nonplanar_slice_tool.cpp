@@ -3784,6 +3784,11 @@ int main(int argc, char **argv)
         }, args.verify || !args.json.empty());
         GCodeWriter::planned_moves = nullptr;
         if (args.progress) print.set_status_default();
+        if (const auto &conflict = result.conflict_result) {
+            const nlohmann::json params = { { "first", conflict->_objName1 }, { "second", conflict->_objName2 },
+                                            { "height", conflict->_height } };
+            coded.add({ "object_path_conflict", {}, params.dump() }, print.get_conflict_string());
+        }
         for (int step = 0; step < int(psCount); ++step)
             for (const PrintStateBase::Warning &w : print.step_state_with_warnings(PrintStep(step)).warnings)
                 coded.add(w.code, w.message);
