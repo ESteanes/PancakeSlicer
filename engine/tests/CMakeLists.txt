@@ -1,19 +1,8 @@
-add_subdirectory(catch2)
-
-if(MSVC)
-    target_compile_definitions(Catch2WithMain PRIVATE DO_NOT_USE_WMAIN)
-endif()
-
 set(TEST_DATA_DIR ${CMAKE_CURRENT_SOURCE_DIR}/data)
 file(TO_NATIVE_PATH "${TEST_DATA_DIR}" TEST_DATA_DIR)
 
 set(PROFILES_DIR ${CMAKE_SOURCE_DIR}/resources/profiles)
 file(TO_NATIVE_PATH "${PROFILES_DIR}" PROFILES_DIR)
-
-include(CTest)
-include(Catch)
-
-set(CATCH_EXTRA_ARGS "" CACHE STRING "Extra arguments for catch2 test suites.")
 
 add_library(test_common INTERFACE)
 target_compile_definitions(test_common INTERFACE TEST_DATA_DIR=R"\(${TEST_DATA_DIR}\)" PROFILES_DIR=R"\(${PROFILES_DIR}\)" CATCH_CONFIG_FAST_COMPILE)
@@ -34,6 +23,22 @@ function(orcaslicer_copy_test_dlls)
         endforeach()
     endif()
 endfunction()
+
+if (NOT BUILD_TESTS)
+    add_subdirectory(fff_print)
+    return()
+endif()
+
+add_subdirectory(catch2)
+
+if (MSVC)
+    target_compile_definitions(Catch2WithMain PRIVATE DO_NOT_USE_WMAIN)
+endif()
+
+include(CTest)
+include(Catch)
+
+set(CATCH_EXTRA_ARGS "" CACHE STRING "Extra arguments for catch2 test suites.")
 
 function(orcaslicer_discover_tests TARGET)
     catch_discover_tests(${TARGET} ADD_TAGS_AS_LABELS)

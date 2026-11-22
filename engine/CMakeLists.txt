@@ -144,6 +144,7 @@ endif ()
 
 option(SLIC3R_BUILD_SANDBOXES   "Build development sandboxes" OFF)
 option(BUILD_TESTS       "Build unit tests" OFF)
+option(SLIC3R_BUILD_SLICE_TOOL "Build nonplanar_slice_tool without requiring unit tests" OFF)
 option(ORCA_TOOLS       "Build Orca tools" OFF)
 
 if (IS_CROSS_COMPILE)
@@ -304,9 +305,6 @@ if (CMAKE_SYSTEM_NAME STREQUAL "Linux")
 
     set(THREADS_PREFER_PTHREAD_FLAG ON)
     find_package(Threads REQUIRED)
-
-    find_package(DBus REQUIRED)
-    include_directories(SYSTEM ${DBUS_INCLUDE_DIRS})
 endif()
 
 if (CMAKE_COMPILER_IS_GNUCC OR CMAKE_COMPILER_IS_GNUXX)
@@ -759,9 +757,9 @@ if(SLIC3R_BUILD_SANDBOXES)
     add_subdirectory(sandboxes)
 endif()
 
-if(BUILD_TESTS)
+if(BUILD_TESTS OR SLIC3R_BUILD_SLICE_TOOL)
     add_subdirectory(tests)
-    if (NOT SLIC3R_BUNDLED_WARNINGS)
+    if (BUILD_TESTS AND NOT SLIC3R_BUNDLED_WARNINGS)
         orcaslicer_silence_third_party_warnings("${CMAKE_CURRENT_SOURCE_DIR}/tests/catch2")
     endif ()
 endif()

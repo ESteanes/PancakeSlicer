@@ -13,7 +13,11 @@ add_subdirectory(nlohmann)
 add_subdirectory(stb_dxt)     # Header-only STB DXT compression library
 
 # Static libraries
-add_subdirectory(Shiny)
+if (SLIC3R_PROFILE)
+    add_subdirectory(Shiny)
+else()
+    add_subdirectory(Shiny EXCLUDE_FROM_ALL)
+endif()
 add_subdirectory(admesh)
 add_subdirectory(clipper2)
 add_subdirectory(expat)
@@ -22,7 +26,6 @@ add_subdirectory(libigl)
 add_subdirectory(libnest2d)
 add_subdirectory(mcut)
 add_subdirectory(miniz)
-add_subdirectory(minilzo)
 add_subdirectory(qhull)
 add_subdirectory(qoi)
 add_subdirectory(semver)      # Semver static library
