@@ -360,15 +360,15 @@ export async function jobRequest(s = getState(), saving = false): Promise<JobReq
   if (!saving) {
     if(s.profileLibraryLoad.state!=='ready')throw new Error(s.profileLibraryLoad.state==='failed'?s.profileLibraryLoad.error:'Hang tight—finishing profile setup before slicing.');
     const {flushLibraryWrites}=await import('./profiles/library-writes');await flushLibraryWrites();
-    validateProfileSubmission(s);
+    const profiles = validateProfileSubmission(s);
     const [{methodAvailability},{methodSelectionProblem}]=await Promise.all([import('./profiles/method-context'),import('./profiles/capabilities')]);
     const availability=methodAvailability(s), global=effectiveConfig(s,'process');
     const effective=[global,...s.objects.flatMap(o=>[ {...global,...o.settings},...(o.volumes ?? []).map(v=>({...global,...o.settings,...v.settings})),...(o.ranges ?? []).flatMap(r=>(o.volumes?.filter(v=>v.type === 'part') ?? [undefined]).map(v=>({...global,...o.settings,...v?.settings,...r.settings})))])];
     for(const config of effective) {const problem=methodSelectionProblem(availability,config);if(problem) throw new Error(`That slicing method isn't available right now: ${problem.reason}`);}
-    const [{readLibrary},{getRecord,recordKey}]=await Promise.all([import('./persist/profile-library'),import('./profiles/records')]), remote=await readLibrary();
-    for(const [kind,key] of [['printer',s.printer],['process',s.process],...slotFilaments(s).map(key=>['filament',key])] as ['printer'|'process'|'filament',string][]) {
-      const local=getRecord(s.records,recordKey(kind,key)), persisted=getRecord(remote,recordKey(kind,key));
-      if(!local || !persisted || local.revision!==persisted.revision) throw new Error('Heads up: one of your selected profiles was updated elsewhere. Reload it or save your current edits before slicing.');
+    const [{readLibrary},{getRecord}]=await Promise.all([import('./persist/profile-library'),import('./profiles/records')]), remote=await readLibrary();
+    for (const { key, revision } of profiles) {
+      const persisted = getRecord(remote, key);
+      if (!persisted || revision !== persisted.revision) throw new Error('Heads up: one of your selected profiles was updated elsewhere. Reload it or save your current edits before slicing.');
     }
     const configs = [effectiveConfig(s, 'process'), ...s.objects.flatMap((o) =>
       [o.settings, ...o.volumes?.map((v) => v.settings) ?? [], ...o.ranges?.map((r) => r.settings) ?? []])];
