@@ -2391,6 +2391,9 @@ bool PrintObject::invalidate_state_by_config_options(
 
 bool PrintObject::invalidate_step(PrintObjectStep step)
 {
+    // Native tree support is built into the curved paths during posNonplanar.
+    if (step == posSupportMaterial && m_native_field && is_tree(m_config.support_type.value))
+        step = posSlice;
     if (curved_tops_mode(m_config.nonplanar_mode.value) &&
         step >= posPrepareInfill && step <= posNonplanar && is_step_done(posNonplanarProjection))
         step = posPerimeters;
@@ -5925,29 +5928,35 @@ void PrintObject::project_and_append_custom_facets(
         bool seam, EnforcerBlockerType type, std::vector<Polygons>& out, std::vector<std::pair<Vec3f, Vec3f>>* vertical_points) const
 {
     const Transform3d object_trafo = this->trafo_sliced();
+    auto project_support_facets = [&](const indexed_triangle_set &facets, const Transform3d &trafo) {
+        if (facets.indices.empty())
+            return;
+        std::vector<Polygons> projected;
+        slice_mesh_slabs(facets, zs_from_layers(this->layers()), trafo, nullptr, &projected, vertical_points, [](){});
+        assert(! projected.empty());
+        assert(out.empty() || out.size() == projected.size());
+        if (out.empty())
+            out = std::move(projected);
+        else
+            for (size_t i = 0; i < out.size(); ++i)
+                append(out[i], std::move(projected[i]));
+    };
     for (const ModelVolume* mv : this->model_object()->volumes)
         if (mv->is_model_part()) {
             const indexed_triangle_set custom_facets = seam
                     ? mv->seam_facets.get_facets_strict(*mv, type)
                     : mv->supported_facets.get_facets_strict(*mv, type);
-            if (! custom_facets.indices.empty()) {
-                if (seam)
+            const Transform3d volume_trafo = object_trafo * mv->get_matrix();
+            if (seam) {
+                if (!custom_facets.indices.empty())
                     project_triangles_to_slabs(this->layers(), custom_facets,
-                        (object_trafo * mv->get_matrix()).cast<float>(),
-                        seam, out);
-                else {
-                    std::vector<Polygons> projected;
-                    slice_mesh_slabs(custom_facets, zs_from_layers(this->layers()), object_trafo * mv->get_matrix(), nullptr, &projected, vertical_points, [](){});
-                    assert(! projected.empty());
-                    assert(out.empty() || out.size() == projected.size());
-                    if (out.empty())
-                        out = std::move(projected);
-                    else
-                        for (size_t i = 0; i < out.size(); ++ i)
-                            append(out[i], std::move(projected[i]));
-                }
-            }
+                        volume_trafo.cast<float>(), seam, out);
+            } else
+                project_support_facets(custom_facets, volume_trafo);
         }
+    if (!seam)
+        if (const auto *facets = Nonplanar::NativeSliceOverride::support_facets(this->model_object()->name, type))
+            project_support_facets(*facets, object_trafo);
     if (! seam && type == EnforcerBlockerType::BLOCKER && m_conformal &&
         (! m_conformal->self_supported.empty() || ! m_conformal->flat_printed.empty() || ! m_conformal->bridged.empty())) {
         std::vector<Polygons> enforcers = this->slice_support_enforcers();
