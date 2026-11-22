@@ -45,7 +45,7 @@ export function addPrimitive(objectId: number, type: VolumeType, shape: Shape) {
 }
 
 export function loadVolume(objectId: number, type: VolumeType) {
-  pickFiles('.stl,.obj', async (files) => {
+  pickFiles('.stl,.STL,.obj,.OBJ', async (files) => {
     const file = files[0];
     try {
       const loaded = await loadMesh(file);

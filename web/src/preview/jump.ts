@@ -31,7 +31,7 @@ export const setJumpListener = (l: typeof onJump) => { onJump = l; };
 let pendingFile: File | null = null;
 let onFile: ((f: File) => void) | null = null;
 export function openGcode() {
-  pickFiles('.gcode,.gco,.g,.3mf', (files) => {
+  pickFiles('.gcode,.GCODE,.gco,.GCO,.g,.G,.3mf,.3MF', (files) => {
     const f = files[0];
     setState({ tab: 'preview' });
     if (onFile) onFile(f); else pendingFile = f;

@@ -84,7 +84,7 @@ function stl(g: THREE.BufferGeometry): Blob {
 }
 
 export function replaceFile(id: number) {
-  pickFiles('.stl,.obj', async (files) => {
+  pickFiles('.stl,.STL,.obj,.OBJ', async (files) => {
     const file = files[0];
     try {
       const geometry = await loadMesh(file);

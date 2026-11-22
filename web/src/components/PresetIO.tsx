@@ -11,7 +11,7 @@ import { notice, noticeText, type NoticeKind } from '../notice-codes';
 import { fileAccept } from '../file-picker';
 
 const TYPE_NAME: Record<PresetType, string> = { machine: 'Printer', filament: 'Filament', process: 'Process' };
-const ACCEPT = '.json,.zip,.bbscfg,.orca_printer,.orca_filament,.orca_bundle';
+const ACCEPT = ['json', 'zip', 'bbscfg', 'orca_printer', 'orca_filament', 'orca_bundle'].flatMap((ext) => [`.${ext}`, `.${ext.toUpperCase()}`]).join(',');
 const close = () => setState({ presetUx: null });
 
 type Row = ImportRow & { checked: boolean; result?: string; ok?: boolean;  added?: ImportRow['record']; addedNote?: string;
