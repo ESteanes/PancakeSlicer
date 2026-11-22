@@ -9,7 +9,7 @@ export type ConnectionKind = 'bambu-lan' | 'bambu-connect' | 'moonraker' | 'octo
 export interface PrinterConnection {
   printer: string; id: string; name: string; kind: ConnectionKind;
   host?: string; serial?: string; model?: string; url?: string; auth?: string; username?: string; slug?: string; limited_controls?: boolean; no_telemetry?: boolean;
-  has_secret: boolean; trust?: string;
+  has_secret: boolean; trust?: string; web_ui?: string;
 }
 export interface Temp { actual: number; target: number }
 export interface NozzleStatus { id: number; extruder: number; diameter: number; type?: string; flow?: string; rack?: boolean; abnormal?: boolean; legacy?: boolean }
@@ -69,7 +69,7 @@ async function call<T>(url: string, init: RequestInit, quiet = false): Promise<T
 
 export interface ConnectionEdit {
   kind: ConnectionKind; name: string; host?: string; serial?: string; access_code?: string; model?: string;
-  url?: string; auth?: string; username?: string; slug?: string; key?: string; clear_key?: boolean;
+  url?: string; auth?: string; username?: string; slug?: string; key?: string; clear_key?: boolean; web_ui?: string;
 }
 export interface ConnectionTest { ok: boolean; stage: string; message: string; model?: string }
 export interface Discovered {
@@ -96,13 +96,25 @@ export async function readSendPlan(job: string, printer: string): Promise<SendPl
   return ((await r.json()) as { slots: SendPlanSlot[] }).slots;
 }
 
-export const LEGACY_HOST_KEYS = ['host_type', 'print_host', 'printhost_apikey', 'printhost_port', 'printhost_user', 'printhost_password', 'printhost_authorization_type', 'flashforge_serial_number'];
+export const LEGACY_HOST_KEYS = ['host_type', 'print_host', 'printhost_apikey', 'printhost_port', 'printhost_user', 'printhost_password', 'printhost_authorization_type', 'flashforge_serial_number', 'print_host_webui'];
 export async function migrateLegacyHost(printer: string, name: string, config: Record<string, unknown>): Promise<string | null> {
   const legacy = Object.fromEntries(LEGACY_HOST_KEYS.flatMap((k) => (config[k] == null || config[k] === '' ? [] : [[k, String([config[k]].flat()[0])]])));
   if (!legacy.print_host) return null;
   const r = await mutation(path(printer, '/legacy'), json('POST', { name, config: { ...legacy, printer_model: printerModel(getState(), printer) } }));
   if (r.ok) return null;
   return `${name}: ${(await responseError(r)).message}`;
+}
+
+export function deviceWebUi(connection: PrinterConnection): string | undefined {
+  const address = connection.web_ui || connection.url;
+  if (!address || connection.kind === 'bambu-lan' || connection.kind === 'bambu-connect') return undefined;
+  try {
+    const u = new URL(address);
+    if (!['http:', 'https:'].includes(u.protocol) || u.username || u.password) return undefined;
+    if (!connection.web_ui && connection.kind === 'moonraker' && u.port === '7125') u.port = '';
+    if (u.origin === location.origin) return undefined;
+    return u.toString();
+  } catch { return undefined; }
 }
 
 export function statusLine(st: PrinterStatus | undefined): string {

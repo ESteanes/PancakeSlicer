@@ -56,12 +56,15 @@ export function ConnectionEditor({ printer, name, onSaved }: { printer: string; 
   const [user, setUser] = useState(saved?.username ?? '');
   const [secret, setSecret] = useState('');
   const [model, setModel] = useState(saved?.model ?? '');
+  const [webUi, setWebUi] = useState(saved?.web_ui ?? '');
   const m = connectionEditFor(printer), snap = useMachine(m), { test, found, error } = snap.context, working = snap.value !== 'idle';
   const sameKind = saved?.kind === kind;
   const bambu = kind === 'bambu-lan', flashforge = kind === 'flashforge', repetier = kind === 'repetier', http = !!kind && !bambu && !flashforge && kind !== 'bambu-connect';
   const digest = kind === 'prusalink' && auth === 'digest';
+  const hasWebUi = !!kind && !bambu && kind !== 'bambu-connect';
   const keyOptional = kind === 'moonraker' || kind === 'duet' || kind === 'elegoolink';
   const edit = (): ConnectionEdit => ({ kind: kind!, name, model: kind === 'elegoolink' ? setupModel : model || undefined,
+    ...(hasWebUi ? { web_ui: webUi.trim() } : {}),
     ...(bambu || flashforge ? { host: host.trim(), serial: serial.trim(), access_code: secret } : {}),
     ...(http ? { url: url.trim(), slug: repetier ? slug : undefined, key: secret, auth: kind === 'prusalink' ? auth : undefined, username: digest ? user.trim() : undefined } : {}) });
   const hasSecret = !!saved?.has_secret && sameKind;
@@ -133,6 +136,9 @@ export function ConnectionEditor({ printer, name, onSaved }: { printer: string; 
         </label>
         {kind === 'elegoolink' && <div className="hint-text connection-hint">Only Centauri 2 uses an access code (default 123456).</div>}
       </>}
+      {hasWebUi && <label className="form-row"><span>Device UI (optional)</span>
+        <input className="text" value={webUi} spellCheck={false} onChange={(e) => changed(setWebUi)(e.target.value)} />
+      </label>}
       {snap.value === 'testing' && <div role="status" className="hint-text">Testing…</div>}
       {test && (test.ok ? <div role="status" className="send-ok">{sentence(test.message)}</div>
         : <div role="alert" className="warning-text">{STAGE[test.stage] ? `${STAGE[test.stage]}: ` : ''}{test.message}</div>)}

@@ -14,10 +14,12 @@ import (
 	"math"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"os"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -39,6 +41,7 @@ type PrinterConfig struct {
 	CredentialFile string
 	TLS            string
 	Fingerprint    string
+	WebUI          string
 
 	id          string
 	fingerprint []byte
@@ -70,13 +73,14 @@ type ConnectionView struct {
 	Trust       string `json:"trust,omitempty"`
 	Limited     bool   `json:"limited_controls,omitempty"`
 	NoTelemetry bool   `json:"no_telemetry,omitempty"`
+	WebUI       string `json:"web_ui,omitempty"`
 }
 
 func (p *PrinterConfig) view() ConnectionView {
 	_, err := os.Stat(p.CredentialFile)
 	return ConnectionView{Printer: p.Printer, ID: p.id, Name: p.Name, Kind: p.Kind, Host: p.Host, Serial: p.Serial, Model: p.model,
 		URL: p.URL, Auth: p.Auth, Username: p.Username, Slug: p.Slug, HasSecret: p.CredentialFile != "" && err == nil, Trust: p.TLS,
-		Limited: p.limitedControls(), NoTelemetry: p.Kind == "repetier"}
+		Limited: p.limitedControls(), NoTelemetry: p.Kind == "repetier", WebUI: p.WebUI}
 }
 
 var bambuSerial = regexp.MustCompile(`^[A-Za-z0-9]{6,32}$`)
@@ -84,6 +88,16 @@ var bambuSerial = regexp.MustCompile(`^[A-Za-z0-9]{6,32}$`)
 func (p *PrinterConfig) validate(resources string) error {
 	if len(p.Name) > 200 || strings.IndexFunc(p.Name, unicode.IsControl) >= 0 {
 		return errors.New("Printer name must be 200 characters or fewer (with no control characters).")
+	}
+	if p.WebUI != "" {
+		if p.Kind == "bambu-lan" || p.Kind == "bambu-connect" {
+			return errors.New("Bambu Lab printers don't have a device web interface.")
+		}
+		u, err := webUIURL(p.WebUI)
+		if err != nil {
+			return err
+		}
+		p.WebUI = u.String()
 	}
 	switch p.Kind {
 	case "prusalink", "octoprint", "moonraker", "duet", "elegoolink", "repetier":
@@ -188,6 +202,32 @@ func (p *PrinterConfig) validate(resources string) error {
 		return errors.New("Auth mode, username, and storage settings only apply to PrusaLink printers.")
 	}
 	return nil
+}
+
+func webUIURL(typed string) (*url.URL, error) {
+	typed = strings.TrimSpace(typed)
+	if !strings.Contains(typed, "://") {
+		typed = "http://" + typed
+	}
+	u, err := url.Parse(typed)
+	if err != nil || len(typed) > 2048 || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" || u.User != nil || strings.IndexFunc(typed, unicode.IsControl) >= 0 {
+		return nil, errors.New("Device UI must be an http:// or https:// address without login credentials.")
+	}
+	host := strings.ToLower(strings.TrimSuffix(u.Hostname(), "."))
+	addr, _ := netip.ParseAddr(host)
+	validHost := validHostName(host)
+	if strings.HasPrefix(u.Host, "[") {
+		validHost = addr.Is6() && addr.Zone() == ""
+	}
+	if !validHost {
+		return nil, errors.New("Device UI must have a valid hostname or IP address.")
+	}
+	if port := u.Port(); port != "" {
+		if n, err := strconv.ParseUint(port, 10, 16); err != nil || n == 0 {
+			return nil, errors.New("Port number must be between 1 and 65535.")
+		}
+	}
+	return u, nil
 }
 
 func secretRequired(kind string) bool {

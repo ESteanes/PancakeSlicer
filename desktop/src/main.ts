@@ -9,7 +9,8 @@ import path from 'node:path';
 
 const MAC = process.platform === 'darwin';
 const EXE = process.platform === 'win32' ? '.exe' : '';
-const DESKTOP_ORIGIN = 'http://127.0.0.1:29731';
+const DESKTOP_PORT = '29731';
+const DESKTOP_ORIGIN = `http://127.0.0.1:${DESKTOP_PORT}`;
 const ACCESS_TOKEN = randomBytes(32).toString('hex');
 const LAUNCH_MODEL = /\.(stl|obj|3mf|step|stp)$/i;
 const MAX_LAUNCH_MODEL_BYTES = 256 * 1024 * 1024;
@@ -24,6 +25,7 @@ let win: BrowserWindow | null = null;
 let quitting = false;
 let quitReady = false;
 let closing = false;
+let deviceUi: { origin: string; apiOrigin: string; sockets: string[] } | null = null;
 
 const STARTING_PAGE = '<!doctype html><title>PancakeSlicer</title><body style="margin:0;height:100vh;display:flex;'
   + 'align-items:center;justify-content:center;background:#363636;color:#d0d0d0;font:15px system-ui,sans-serif;'
@@ -281,7 +283,7 @@ async function startServer(): Promise<string> {
   if (process.platform === 'linux' && fs.existsSync(lib)) env.LD_LIBRARY_PATH = [lib, env.LD_LIBRARY_PATH].filter(Boolean).join(':');
   let lastError = '';
   const child = spawn(path.join(engine, `orca-webapp-server${EXE}`), [
-    '--listen', '127.0.0.1:29731',
+    '--listen', `127.0.0.1:${DESKTOP_PORT}`,
     '--static', web,
     '--tool', path.join(engine, `nonplanar_slice_tool${EXE}`),
     '--resources', path.join(engine, 'resources'),
@@ -403,6 +405,17 @@ function ipc() {
     const files = launchModels.get(id);
     if (files?.delete(index) && !files.size) launchModels.delete(id);
   });
+  ipcMain.handle('orca-desktop:device-ui', (e, address: unknown, apiAddress: unknown) => {
+    if (!origin || e.sender !== win?.webContents || e.senderFrame !== e.sender.mainFrame || e.senderFrame.origin !== origin)
+      throw new Error('not the app');
+    deviceUi = null;
+    if (address === null) return;
+    const ui = deviceHttpUrl(address);
+    const api = apiAddress === undefined ? ui : deviceHttpUrl(apiAddress);
+    if (!ui || !api) throw new Error('Invalid device web UI address');
+    const socket = (url: URL) => `${url.protocol === 'https:' ? 'wss:' : 'ws:'}//${url.host}`;
+    deviceUi = { origin: ui.origin, apiOrigin: api.origin, sockets: [...new Set([socket(ui), socket(api)])] };
+  });
 }
 
 
@@ -429,18 +442,63 @@ async function openInBambuConnect(jobId: unknown, filename: unknown) {
 }
 
 
-function restrictNetwork(target: Electron.Session) {
+function deviceHttpUrl(address: unknown) {
+  const url = typeof address === 'string' ? URL.parse(address) : null;
+  if (!url || !['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.port === DESKTOP_PORT) return null;
+  // Origins are interpolated into CSP source expressions.
+  if (!/^(?:[a-z0-9.-]+|\[[0-9a-f:]+\])$/.test(url.hostname)) return null;
+  return url;
+}
+
+function restrictNetwork(target: Electron.Session, appContents?: Electron.WebContents) {
   target.setSpellCheckerEnabled(false);
-  target.webRequest.onBeforeRequest({ urls: ['<all_urls>'] }, (details, callback) => {
+  target.webRequest.onBeforeRequest((details, callback) => {
     const url = new URL(details.url);
+    const { initiatorOrigin, resourceType, webContentsId } = details;
+    const selected = appContents && webContentsId === appContents.id ? deviceUi : null;
+    const fromPrinter = !!selected && initiatorOrigin === selected.origin;
+    // Navigation requests are attributed to their initiator, including redirects.
+    if (resourceType === 'subFrame') {
+      callback({ cancel: !selected || deviceHttpUrl(details.url)?.origin !== selected.origin
+        || (initiatorOrigin !== DESKTOP_ORIGIN && !fromPrinter) });
+      return;
+    }
+    if (fromPrinter) {
+      const http = deviceHttpUrl(details.url);
+      const allow = resourceType !== 'mainFrame' && (http?.origin === selected.origin
+        || (resourceType === 'xhr' && http?.origin === selected.apiOrigin)
+        || (resourceType === 'webSocket' && selected.sockets.includes(url.origin))
+        || url.protocol === 'data:' || (url.protocol === 'blob:' && url.origin === selected.origin));
+      callback({ cancel: !allow });
+      return;
+    }
     const local = url.origin === DESKTOP_ORIGIN;
     const update = url.protocol === 'https:' && url.hostname === 'api.github.com'
       && url.pathname === '/repos/ZimengXiong/PancakeSlicer/releases' && url.search === '?per_page=30';
     const embedded = ['blob:', 'data:', 'devtools:'].includes(url.protocol);
-    const allow = local || update || embedded;
+    const allow = (initiatorOrigin === undefined || initiatorOrigin === DESKTOP_ORIGIN)
+      && !details.frame?.parent && (local || update || embedded);
     if (!allow) console.error(`Blocked outbound request: ${url.origin}${url.pathname}`);
     callback({ cancel: !allow });
   });
+  if (!appContents) return;
+  target.webRequest.onHeadersReceived((details, callback) => {
+    const selected = deviceUi;
+    if (!selected || details.resourceType !== 'subFrame' || details.webContentsId !== appContents.id
+      || deviceHttpUrl(details.url)?.origin !== selected.origin) {
+      callback({});
+      return;
+    }
+    const headers = { ...details.responseHeaders };
+    const key = Object.keys(headers).find((name) => name.toLowerCase() === 'content-security-policy') ?? 'Content-Security-Policy';
+    const endpoints = [...new Set([selected.origin, selected.apiOrigin, ...selected.sockets])];
+    headers[key] = [...(headers[key] ?? []), `connect-src ${endpoints.join(' ')}; frame-src 'self'; form-action 'self'; object-src 'none'; frame-ancestors ${DESKTOP_ORIGIN} 'self'`];
+    callback({ responseHeaders: headers });
+  });
+  target.setPermissionCheckHandler((_contents, _permission, requestingOrigin, details) =>
+    details.isMainFrame && URL.parse(requestingOrigin)?.origin === DESKTOP_ORIGIN);
+  target.setPermissionRequestHandler((_contents, _permission, callback, details) =>
+    callback(details.isMainFrame && URL.parse(details.requestingUrl)?.origin === DESKTOP_ORIGIN));
 }
 
 async function start() {
@@ -450,7 +508,6 @@ async function start() {
   const serving = startServer();
   if (app.commandLine.hasSwitch('service-only')) { origin = await serving; return; }
   const rendererSession = session.fromPartition('orca-service-renderer', { cache: false });
-  restrictNetwork(rendererSession);
   if (rendererSession.isPersistent() || rendererSession.getStoragePath() !== null) throw new Error('Oops! The app window needs an isolated in-memory session to run safely.');
   win = new BrowserWindow({
     width: 1440,
@@ -471,12 +528,26 @@ async function start() {
   });
   win.on('closed', () => { win = null; });
   const contents = win.webContents;
+  restrictNetwork(rendererSession, contents);
   contents.on('console-message', (details) => {
     if (details.level === 'warning' || details.level === 'error')
       console.error(`Renderer ${details.level}: ${details.message} (${details.sourceId}:${details.lineNumber})`);
   });
 
   contents.on('will-prevent-unload', (e) => e.preventDefault());
+  const restrictFrame = (event: Electron.Event<Electron.WebContentsWillFrameNavigateEventParams>) => {
+    if (!event.isMainFrame && (!deviceUi || deviceHttpUrl(event.url)?.origin !== deviceUi.origin)) event.preventDefault();
+  };
+  contents.on('will-frame-navigate', restrictFrame);
+  contents.on('will-redirect', (event) => {
+    if (event.isMainFrame && new URL(event.url).origin !== origin) event.preventDefault();
+    restrictFrame(event);
+  });
+  contents.on('did-start-navigation', (event) => {
+    if (event.isMainFrame && !event.isSameDocument) deviceUi = null;
+  });
+  contents.on('render-process-gone', () => { deviceUi = null; });
+  contents.on('destroyed', () => { deviceUi = null; });
   contents.on('will-navigate', (e, target) => {
     if (new URL(target).origin !== origin) { e.preventDefault(); shell.openExternal(target); }
   });
@@ -490,7 +561,7 @@ async function start() {
       if (!url.pathname.startsWith('/help/')) guide.on('page-title-updated', (event) => event.preventDefault());
       guide.webContents.on('will-navigate', (event, next) => { if (new URL(next).origin !== origin) event.preventDefault(); });
       void guide.loadURL(target).catch(console.error);
-    } else if (url.protocol === 'https:' && url.origin !== origin) void shell.openExternal(target);
+    } else if ((url.protocol === 'https:' || url.protocol === 'http:') && url.origin !== origin) void shell.openExternal(target);
     return { action: 'deny' };
   });
   await win.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(STARTING_PAGE)}`);

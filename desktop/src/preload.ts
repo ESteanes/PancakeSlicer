@@ -33,6 +33,7 @@ contextBridge.exposeInMainWorld('orcaDesktop', {
   },
   readLaunchFiles: (after: number) => ipcRenderer.invoke('orca-desktop:read-launch-files', after),
   acceptLaunchFile: (id: number, index: number): Promise<void> => ipcRenderer.invoke('orca-desktop:accept-launch-file', id, index),
+  showDeviceUi: (address: string | null, apiAddress?: string): Promise<void> => ipcRenderer.invoke('orca-desktop:device-ui', address, apiAddress),
   onBeforeClose(handler: () => Promise<void>) {
     beforeClose.add(handler);
     markCloseReady();
