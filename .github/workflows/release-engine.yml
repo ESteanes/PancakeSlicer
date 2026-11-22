@@ -72,6 +72,8 @@ jobs:
         shell: pwsh
         run: |
           choco install nasm ninja ccache --no-progress -y
+          python -m pip install --quiet 'cmake<4.3'
+          python -c "import cmake; print(cmake.CMAKE_BIN_DIR)" >> $env:GITHUB_PATH
           'C:\Program Files\NASM' >> $env:GITHUB_PATH
       - name: Fetch native dependencies
         id: deps
