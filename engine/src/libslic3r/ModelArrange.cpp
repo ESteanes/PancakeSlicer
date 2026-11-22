@@ -93,7 +93,7 @@ void measure_nonplanar_relief(ModelInstance *instance, const DynamicPrintConfig 
     std::sort(range_cuts.begin(), range_cuts.end());
     range_cuts.erase(std::unique(range_cuts.begin(), range_cuts.end()), range_cuts.end());
 
-    constexpr double inf = std::numeric_limits<double>::infinity();
+    static constexpr double inf = std::numeric_limits<double>::infinity();
     struct Facet { double low = inf, high = -inf, area = 0., min_area = inf; };
     double start_z = inf;
     const Transform3d matrix = instance->get_matrix();
