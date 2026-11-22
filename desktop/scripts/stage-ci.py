@@ -136,7 +136,10 @@ def main():
     parser.add_argument('--engine-source', required=True)
     parser.add_argument('--image')
     parser.add_argument('--dependency-prefix',type=Path)
+    parser.add_argument('--reference-only', action='store_true', help='Generate the Linux x64 reference and stop before qualifying the payload')
     args = parser.parse_args()
+    if args.reference_only and (args.os, args.arch) != ('linux', 'x64'):
+        parser.error('--reference-only requires Linux x64')
     tool = args.tool.resolve()
     build = ROOT / 'desktop/build'
     build.mkdir(parents=True, exist_ok=True)
@@ -216,6 +219,8 @@ def main():
             '--resources', resources, '--engine-source', engine_source, '--output', reference)
         if not json.loads((reference / 'qualification.json').read_text())['audits_passed']:
             raise RuntimeError('The engine reference failed its audits')
+    if args.reference_only:
+        return
     run(sys.executable, ROOT / 'engine/scripts/qualification/qualify.py', '--command-prefix', json.dumps(command_prefix), '--tool', native,
         '--resources', resources, '--engine-source', engine_source, '--publication-source', revision,
         '--reference', reference, '--output', qualification)
