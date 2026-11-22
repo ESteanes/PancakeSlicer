@@ -773,7 +773,7 @@ bool generate_planar_native_support(PrintObject &object)
         std::vector<const ExtrusionPath *> paths;
         for (const LayerRegion *region : layer->regions()) {
             flatten(&region->perimeters, paths);
-            flatten(&region->thin_fills, paths);
+            // Layer::make_fills already copies thin fills into fills.
             flatten(&region->fills, paths);
         }
         for (const ExtrusionPath *path : paths) {
@@ -1063,10 +1063,9 @@ void build_native_patch(PrintObject &object, const std::shared_ptr<const LayerFi
         const Layer &layer = *sliced.layers()[k];
         internal.push_back(domains[k]);
         std::vector<const ExtrusionPath *> paths = support[k];
-        for (const LayerRegion *region : layer.regions()) {
+        for (const LayerRegion *region : layer.regions())
             flatten(&region->perimeters, paths, seam_at, &seamed);
-            flatten(&region->thin_fills, paths);
-        }
+        // Layer::make_fills already copies thin fills into fills.
         for (const LayerRegion *region : layer.regions())
             flatten(&region->fills, paths);
         for (const ExtrusionPath *path : paths) {
