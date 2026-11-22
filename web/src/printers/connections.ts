@@ -120,7 +120,7 @@ export function deviceWebUi(connection: PrinterConnection): string | undefined {
 export function statusLine(st: PrinterStatus | undefined): string {
   if (!st) return '';
   if (!st.online) return st.link === 'connecting' ? 'Connecting…' : 'Offline';
-  const word = { idle: 'Connected', printing: 'Printing', paused: 'Paused', finished: 'Finished', failed: 'Last print failed', busy: 'Busy', error: 'Error', offline: 'Printer offline', connecting: 'Connecting…', unknown: 'Printer status unavailable' }[st.state];
+  const word = { idle: 'Connected', printing: 'Printing', paused: 'Paused', finished: 'Finished', failed: 'Last print failed', busy: 'Busy', error: 'Error', offline: 'Printer offline', connecting: 'Connecting…', unknown: 'Connected (send only)' }[st.state];
   const parts = [word + (st.progress != null && (st.state === 'printing' || st.state === 'paused') ? ` ${Math.round(st.progress * 100)}%` : '')];
   if (st.remaining_s && st.state === 'printing') {
     const m = Math.round(st.remaining_s / 60);
