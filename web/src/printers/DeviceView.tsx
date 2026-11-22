@@ -97,6 +97,7 @@ function jobEnd(st: PrinterStatus | undefined): { label: string; tone?: StatusTo
     case 'error': return { label: 'Printer error', tone: 'error', reason: reason && `Error ${reason}` };
     case 'finished': return { label: 'Print finished' };
     case 'busy': return { label: 'Printer busy' };
+    case 'unknown': return { label: statusLine(st) };
     default: return { label: st.detail === 'cancelled' ? 'Print cancelled' : 'Ready to print' };
   }
 }
