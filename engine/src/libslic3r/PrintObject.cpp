@@ -2950,8 +2950,12 @@ PrintObject::detect_nonplanar_surfaces()
         BOOST_LOG_TRIVIAL(trace) << "detect_nonplanar_surfaces for region " << region_id;
         const PrintRegion &region = this->printing_region(region_id);
 
+        std::optional<double> planar_ironing_from_z;
+        if (!m_layers.empty() && Layer::choose_ironing_extruder(region.config(), m_print->config().spiral_mode, true) >= 0)
+            planar_ironing_from_z = region.config().ironing_type == IroningType::TopmostOnly ?
+                m_layers.back()->slice_z : m_layers.front()->slice_z;
         for (const auto& nonplanar_surface: this->nonplanar_surfaces()) {
-            ExPolygons raw_projection = nonplanar_surface.horizontal_projection();
+            ExPolygons raw_projection = nonplanar_surface.horizontal_projection(planar_ironing_from_z);
             if (const auto *repair = nonplanar_repair(); repair != nullptr) {
                 Polygons struck;
                 for (const auto &disc : repair->planar) {
