@@ -59,7 +59,8 @@ function objectsPatch(state: State, imported: ImportedPlate[], area: THREE.Vecto
     tab: 'prepare', job: markStale(state.job) };
 }
 
-export async function importObjects(file: File, allowNew = false, sourceUrl?: string): Promise<number> {
+export async function importObjects(file: File, allowNew = false, sourceUrl?: string, canImport = () => true): Promise<number> {
+  if (!canImport()) return 0;
   const generation = documentGeneration();
   const task = importing.begin('loading');
   const busy = beginBusy(`Reading ${file.name}`, task.signal);
@@ -98,7 +99,7 @@ export async function importObjects(file: File, allowNew = false, sourceUrl?: st
       missing() { skipped.push('objects without meshes'); },
     }, true);
     busy.end();
-    if (!task.current()) return 0;
+    if (!task.current() || !canImport()) return 0;
     if (!objects.length) throw new Error(`${file.name}: no 3D meshes found in this file`);
     for (const o of objects) {
       const [instance] = o.instances;
@@ -107,17 +108,17 @@ export async function importObjects(file: File, allowNew = false, sourceUrl?: st
     }
     const hasSettings = skipped.includes('settings');
     const choice = await importObjectsDialog(file.name, objects.length, [...new Set(skipped.filter((s) => s !== 'settings' || !hasSettings))], allowNew, hasSettings);
-    if (!choice || !task.current() || generation !== documentGeneration()) return 0;
+    if (!choice || !task.current() || generation !== documentGeneration() || !canImport()) return 0;
     let project: import('../profiles/library-io').ProjectSettings | null = null, settingsNote: string | null = null;
     if (choice === 'settings') try { project = await (await import('../profiles/library-io')).decodeProjectSettings(file); }
     catch (e) { const why = e instanceof Error ? e.message : String(e); settingsNote = /no project settings/i.test(why) ? 'No project settings in this file; its objects were imported.' : `Its settings couldn't be read (${why}); its objects were imported.`; }
-    if (!task.current() || generation !== documentGeneration()) return 0;
+    if (!task.current() || generation !== documentGeneration() || !canImport()) return 0;
     const [{ blobDigest }, { assignBlobKey }] = await Promise.all([import('../api/blobs'), import('../persist/session')]);
     await Promise.all(objects.map(async (o) => {
       o.source = new File([await bakeStl(o)], `${o.name.replace(/\.[^.]+$/, '') || 'object'}.stl`, { type: 'model/stl' });
       assignBlobKey(o.source, `sha256-${await blobDigest(o.source)}`);
     }));
-    if (!task.current()) return 0;
+    if (!task.current() || !canImport()) return 0;
     if (choice === 'new') {
       task.done();
       if (!await newProject(true)) return 0;
@@ -126,7 +127,7 @@ export async function importObjects(file: File, allowNew = false, sourceUrl?: st
     const placing = documentGeneration();
     const report = project ? applyProjectProfiles(project, byItem) : [];
     const area = await printerBed();
-    if (!task.current() || placing !== documentGeneration()) return 0;
+    if (!task.current() || placing !== documentGeneration() || !canImport()) return 0;
     undoable('Import objects', () => setState((state) => objectsPatch(state, [...plates.values()].sort((a, b) => a.index - b.index), area)));
     committed = true;
     if (project) reportProjectSettings(project, report);

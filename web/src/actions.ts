@@ -134,15 +134,16 @@ export async function printerBed(): Promise<THREE.Vector2[]> {
   return area;
 }
 
-export async function importFiles(files: FileList | File[], opts: { sourceUrl?: string } = {}): Promise<number> {
+export async function importFiles(files: FileList | File[], opts: { sourceUrl?: string; canImport?: () => boolean } = {}): Promise<number> {
   let list = [...files];
-  if (!list.length) return 0;
+  const canImport = opts.canImport ?? (() => true);
+  if (!list.length || !canImport()) return 0;
   setState({ tab: 'prepare' });
   const generation = documentGeneration();
   let imported = 0;
   for (const file of list.filter((f) => /\.3mf$/i.test(f.name))) {
-    imported += await (await import('./plater/import-project')).importObjects(file, false, opts.sourceUrl);
-    if (generation !== documentGeneration()) return imported;
+    imported += await (await import('./plater/import-project')).importObjects(file, false, opts.sourceUrl, canImport);
+    if (generation !== documentGeneration() || !canImport()) return imported;
   }
   list = list.filter((f) => !/\.3mf$/i.test(f.name));
   if (!list.length) return imported;
@@ -176,7 +177,7 @@ export async function importFiles(files: FileList | File[], opts: { sourceUrl?: 
       busy?.end();
     }
   }
-  if (!task.current()) { for (const o of added) o.geometry.dispose(); return imported; }
+  if (!task.current() || !canImport()) { for (const o of added) o.geometry.dispose(); task.done(); return imported; }
   if (!added.length) { task.done(); return imported; }
   let area: THREE.Vector2[];
   try { area = await printerBed(); }
@@ -185,7 +186,7 @@ export async function importFiles(files: FileList | File[], opts: { sourceUrl?: 
     if (task.current()) { task.fail(e); toast('couldnt_place', { value: added.map((o) => o.name).join(', '), detail: e instanceof Error ? e.message : String(e) }); }
     return imported;
   }
-  if (!task.current()) { for (const o of added) o.geometry.dispose(); return imported; }
+  if (!task.current() || !canImport()) { for (const o of added) o.geometry.dispose(); task.done(); return imported; }
   const simplified = added.flatMap((o) => o.simplification ? [o.simplification] : []);
   if (simplified.length) void import('./simplify/ui').then((m) => m.noteSimplified(simplified));
   undoable(added.length > 1 ? 'Add objects' : 'Add object', () => setState((s) => {

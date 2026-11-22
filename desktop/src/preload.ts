@@ -26,6 +26,13 @@ contextBridge.exposeInMainWorld('orcaDesktop', {
 
 
   bambuConnect: (jobId: string, filename: string): Promise<void> => ipcRenderer.invoke('orca-desktop:bambu-connect', jobId, filename),
+  onLaunchFilesAvailable(cb: () => void) {
+    const notify = () => cb();
+    ipcRenderer.on('orca-desktop:launch-files-available', notify);
+    return () => { ipcRenderer.removeListener('orca-desktop:launch-files-available', notify); };
+  },
+  readLaunchFiles: (after: number) => ipcRenderer.invoke('orca-desktop:read-launch-files', after),
+  acceptLaunchFile: (id: number, index: number): Promise<void> => ipcRenderer.invoke('orca-desktop:accept-launch-file', id, index),
   onBeforeClose(handler: () => Promise<void>) {
     beforeClose.add(handler);
     markCloseReady();
