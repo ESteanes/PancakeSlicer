@@ -264,6 +264,12 @@ func (c *Catalog) Job(lib *Library, in Request) (*SliceConfig, error) {
 	if err != nil {
 		return nil, err
 	}
+	if len(used) == 0 {
+		if len(printer.Nozzles) == 0 {
+			return nil, fmt.Errorf("%s has no nozzles configured.", printer.Name)
+		}
+		used = []int{0}
+	}
 	lo, hi, limit, err := heightRange(printer, sources, used)
 	if err != nil {
 		return nil, err
