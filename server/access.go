@@ -30,7 +30,11 @@ func (s *Server) authorized(r *http.Request) bool {
 }
 
 func sameOrigin(r *http.Request) bool {
-	if site := r.Header.Get("Sec-Fetch-Site"); site != "" && site != "same-origin" && site != "none" {
+	switch r.Header.Get("Sec-Fetch-Site") {
+	case "same-origin", "none":
+		return true
+	case "":
+	default:
 		return false
 	}
 	if origin := r.Header.Get("Origin"); origin != "" {

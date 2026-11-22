@@ -321,7 +321,7 @@ func logFailure(r *http.Request, recorder *requestWriter) {
 }
 
 func (s *Server) middleware(next http.Handler) http.Handler {
-	lockHost := len(s.cfg.TrustedProxies) == 0 && loopbackHost(s.cfg.Listen)
+	lockHost := s.cfg.BearerToken != "" && len(s.cfg.TrustedProxies) == 0 && loopbackHost(s.cfg.Listen)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		recorder := &requestWriter{ResponseWriter: w}
 		w = recorder
