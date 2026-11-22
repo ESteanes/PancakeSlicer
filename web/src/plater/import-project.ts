@@ -3,6 +3,7 @@ import { currentPlate } from '../settings/common';
 import { plateLabel, plateSetup } from '../profiles/plate-setup';
 import type * as THREE from 'three';
 import type { PlateObject, State } from '../state/store';
+import { T3 } from '../three-runtime';
 import type { ProjectItem } from './threemf';
 import { archivePainting } from './paint';
 import { getState, markStale, newId, selectPrinter, setState, toast } from '../state/store';
@@ -11,7 +12,7 @@ import { beginBusy } from '../state/busy';
 import { importing } from '../flow/import';
 import { importObjectsDialog } from '../components/Ask';
 import { newProject, printerBed } from '../actions';
-import { bakeStl, bedBounds, instanceBox, loadProject, nextFreeSpot, outsideBed } from './geometry';
+import { bakeStl, bedBounds, centred, instanceBox, loadProject, nextFreeSpot, outsideBed } from './geometry';
 import { listedPlates } from './plates';
 import { slotFilaments } from '../profiles/slots';
 import { OPTIONS } from '../options';
@@ -46,7 +47,8 @@ function objectsPatch(state: State, imported: ImportedPlate[], area: THREE.Vecto
   for (const [i, incoming] of imported.entries()) {
     const index = i === 0 ? state.plateIndex : nextIndex++;
     const previous = plates.find((p) => p.index === index);
-    const objects = incoming.objects.map((o) => ({ ...o, extruder: Math.max(1, Math.min(slots, o.extruder)) }));
+    // Keep distinct slots on imported assemblies so they can be remapped together.
+    const objects = incoming.objects.map((o) => o.volumes?.length ? o : { ...o, extruder: Math.max(1, Math.min(slots, o.extruder)) });
     if (previous) previous.objects = placeObjects(previous.objects, objects, area);
     else plates.push({ index, name: '', origin: [0, 0], settings: {}, events: [], objects: placeObjects([], objects, area) });
   }
@@ -64,6 +66,7 @@ export async function importObjects(file: File, allowNew = false, sourceUrl?: st
   const plates = new Map<number, ImportedPlate>();
   let items: ProjectItem[] = [], skipped: string[] = [];
   const objects: PlateObject[] = [];
+  const parents = new Map<number, PlateObject>();
   const byItem = new Map<string, PlateObject[]>();
   let committed = false;
   try {
@@ -72,11 +75,22 @@ export async function importObjects(file: File, allowNew = false, sourceUrl?: st
       mesh(i, geometry, centre) {
         if (!task.current()) { geometry.dispose(); return; }
         const item = items[i];
+        const paint = item.paint ? archivePainting(item.paint) ?? undefined : undefined;
+        if (item.part) {
+          const parent = parents.get(item.part.parent)!;
+          const origin = parent.instances[0];
+          const [mesh, back] = centred(geometry);
+          geometry.dispose();
+          const matrix = new T3.Matrix4().makeTranslation(centre.x - origin.x, centre.y - origin.y, centre.z - (origin.z ?? 0)).multiply(back);
+          (parent.volumes ??= []).push({ id: newId(), name: item.name, type: item.part.type, seamMode: item.part.seamMode,
+            geometry: mesh, matrix: matrix.elements, extruder: item.extruder, settings: {}, paint });
+          return;
+        }
         const triangles = (geometry.index?.count ?? geometry.attributes.position.count) / 3;
-        const paint = item.paint && archivePainting(item.paint);
         const object: PlateObject = { id: newId(), name: item.name, geometry, rotX: 0, rotY: 0, scale: [1, 1, 1], ...(paint && Object.keys(paint).length ? { paint } : {}),
           extruder: item.extruder, settings: {}, source: new File([], 'object.stl'),
-          simplification: { trianglesBefore: triangles, trianglesAfter: triangles, maxErrorMm: 0, kept: 'original' }, ...(sourceUrl ? { sourceUrl } : {}), instances: [{ id: newId(), x: centre.x, y: centre.y, z: Math.max(0, centre.z), rotZ: 0 }] };
+          simplification: { trianglesBefore: triangles, trianglesAfter: triangles, maxErrorMm: 0, kept: 'original' }, ...(sourceUrl ? { sourceUrl } : {}), instances: [{ id: newId(), x: centre.x, y: centre.y, z: centre.z, rotZ: 0 }] };
+        parents.set(i, object);
         objects.push(object); byItem.set(item.id, [...byItem.get(item.id) ?? [], object]);
         const plate = plates.get(item.plateIndex) ?? { index: item.plateIndex, objects: [] };
         plate.objects.push(object); plates.set(item.plateIndex, plate);
@@ -86,6 +100,11 @@ export async function importObjects(file: File, allowNew = false, sourceUrl?: st
     busy.end();
     if (!task.current()) return 0;
     if (!objects.length) throw new Error(`${file.name}: no 3D meshes found in this file`);
+    for (const o of objects) {
+      const [instance] = o.instances;
+      const bottom = instanceBox(o, instance).min.z;
+      instance.z = (instance.z ?? 0) - Math.min(0, bottom);
+    }
     const hasSettings = skipped.includes('settings');
     const choice = await importObjectsDialog(file.name, objects.length, [...new Set(skipped.filter((s) => s !== 'settings' || !hasSettings))], allowNew, hasSettings);
     if (!choice || !task.current() || generation !== documentGeneration()) return 0;
@@ -119,7 +138,10 @@ export async function importObjects(file: File, allowNew = false, sourceUrl?: st
     return 0;
   } finally {
     busy.end();
-    if (!committed) for (const o of objects) o.geometry.dispose();
+    if (!committed) for (const o of objects) {
+      o.geometry.dispose();
+      o.volumes?.forEach((v) => v.geometry.dispose());
+    }
     if (task.current()) task.done();
   }
 }

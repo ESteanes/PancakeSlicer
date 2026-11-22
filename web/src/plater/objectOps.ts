@@ -62,8 +62,8 @@ export async function partsToObjects(id: number) {
     const g = v.geometry.clone().applyMatrix4(volumeWorld(o, inst, v));
     const at = new THREE.Box3().setFromBufferAttribute(g.attributes.position as THREE.BufferAttribute);
     const file = new File([stl(g)], `${v.name}.stl`, { type: 'model/stl' });
-    objects.push({ ...o, id: newId(), name: v.name, geometry: await loadMesh(file), source: file, rotX: 0, rotY: 0, scale: [1, 1, 1], volumes: undefined,
-      extruder: v.extruder || o.extruder, settings: { ...o.settings, ...v.settings }, paint: undefined, layerProfile: undefined, units: undefined,
+    objects.push({ ...o, id: newId(), name: v.name, geometry: await loadMesh(file, undefined, !v.paint), source: file, rotX: 0, rotY: 0, scale: [1, 1, 1], volumes: undefined,
+      extruder: v.extruder || o.extruder, settings: { ...o.settings, ...v.settings }, paint: v.paint, layerProfile: undefined, units: undefined,
       instances: [{ id: newId(), x: (at.min.x + at.max.x) / 2, y: (at.min.y + at.max.y) / 2, rotZ: 0, z: 0 }] });
   }
   const rest: PlateObject = { ...o, volumes: o.volumes!.filter((v) => v.type !== 'part') };
