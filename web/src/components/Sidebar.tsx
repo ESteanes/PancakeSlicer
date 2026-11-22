@@ -22,6 +22,7 @@ import { filamentSlots as capacity } from '../profiles/machines';
 import { addFilament, FilamentMenu, PlateTypeField, removeSlot } from '../profiles/SetupRows';
 import { PresetCombo, requestPreset } from './PresetCombo';
 import { ChangesMark, PresetActions, PrinterChangesMark } from '../profiles/PresetBar';
+import { SpoolPicker } from '../filament-inventory/SpoolPicker';
 import { MenuButton, type MenuEntry } from './Menu';
 import { Caret } from './Caret';
 import { flushSavedPreferences, preferenceText, savePreferences, usePreference } from '../saved-preferences';
@@ -126,6 +127,7 @@ function SlotRows() {
     <div className="rail-row rail-slot"><PresetCombo type="filament" slot={i}/>{tail(i)}
       {reportOf(i) && <span className="rail-slot-report">{report(i)}</span>}
       {awaiting && (bootSlots ? bootSlots[i]?.report : true) && <span className="rail-slot-report" aria-hidden="true"><span className="skel-line" style={{ display: 'inline-block', width: '60%' }}>{'\u00a0'}</span>{noteLine(i)}</span>}</div>
+    <SpoolPicker slot={i}/>
   </Fragment>)}</div>;
 }
 function SlotMenu() {

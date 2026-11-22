@@ -2,11 +2,12 @@ import type { LibraryRecords } from '../profiles/records';
 import type { DemoCatalog } from './resolver';
 import { NO_ENGINE, SAMPLE_JOB } from './config';
 import { GITHUB_URL } from '../build-info';
-import { spoolError, type Spool } from '../filament-inventory/model';
+import { sliceFilamentUsage, spoolError, spoolUsage, type PrintRecord, type Spool, type SpoolAssignment } from '../filament-inventory/model';
 type Row = Record<string, any>;
 interface Seed { library: LibraryRecords; preferences: Row; session: Row; printCatalog: Row[]; projects: Row[] }
 interface DemoState { library: LibraryRecords; preferences: Row; session: Row; projects: Record<string, Row>; drafts: Record<string, Row>;
   inventory?: Row; inventoryOperations?: Record<string, { input: string; response: Row }>;
+  inventoryPrints?: Record<string, PrintRecord & { digest: string }>;
   assets: Record<string, string>; versions: Record<string, Row[]>; folders: Row[]; folderRevision: number }
 type Resolve = (library: LibraryRecords, body: unknown, options: unknown, catalog: DemoCatalog) => Promise<unknown>;
 let hooks: { notice?(code: 'demo_storage_full'): void; resolve?: Resolve; slotOffer?: Resolve } = {};
@@ -147,6 +148,42 @@ async function handle(request: Request): Promise<Response> {
     if (method === 'GET') return json(s[path]);
     const input = await body(request); s[path] = { revision: input.expectedRevision + 1, document: input.document }; save(s);
     return json({ revision: s[path].revision, operationId: input.operationId });
+  }
+  if (path === 'filament-inventory/prints') {
+    if (method === 'GET') return json(Object.values(s.inventoryPrints ?? {}).filter(row => !url.searchParams.get('jobId') || row.jobId === url.searchParams.get('jobId')).sort((a, b) => b.at - a.at));
+    if (method !== 'POST') return json({ error: 'Method not allowed.' }, 405);
+    const input = await body(request), assignments = input.assignments as SpoolAssignment[];
+    const id = (value: unknown) => typeof value === 'string' && /^[A-Za-z0-9._-]{1,200}$/.test(value) && value !== '.' && value !== '..';
+    if (!id(input.printId) || !id(input.jobId) || typeof input.name !== 'string' || !input.name.trim() || input.name.length > 200 || !Number.isSafeInteger(input.expectedRevision) || input.expectedRevision < 0
+      || !Array.isArray(assignments) || !assignments.length || assignments.length > 256 || assignments.some(row => !row || !Number.isInteger(row.slot) || row.slot < 0 || row.slot > 255 || !id(row.spoolId)) || new Set(assignments.map(row => row.slot)).size !== assignments.length)
+      return json({ error: 'A slice job, name, inventory revision and spool assignments are required.', code: 'invalid_inventory_print' }, 400);
+    const digest = JSON.stringify([input.jobId, input.name, [...assignments].sort((a, b) => a.slot - b.slot)]);
+    const replay = () => {
+      const prior = s.inventoryPrints?.[input.printId];
+      return prior ? prior.digest === digest ? json({ print: prior, ...s.inventory }) : json({ error: 'This print was already recorded with different spool assignments.', code: 'inventory_print_conflict' }, 409) : null;
+    };
+    const first = replay(); if (first) return first;
+    if (input.jobId !== SAMPLE_JOB) return json({ error: 'This slice is no longer available. Slice the plate again.', code: 'inventory_slice_unavailable' }, 410);
+    const result = await sampleStatus(), usage = sliceFilamentUsage(result.record);
+    const again = replay(); if (again) return again;
+    const inventory = s.inventory ?? { revision: 0, document: { spools: [] } };
+    if (input.expectedRevision !== inventory.revision) return json({ error: 'Inventory changed. Reload and review the remaining weights.', code: 'revision_conflict', revision: inventory.revision }, 409);
+    if (result.state !== 'done' || !usage || usage.length !== assignments.length || usage.some(row => !assignments.some(assignment => assignment.slot === row.slot)))
+      return json({ error: 'Spool assignments must match the filaments used by a completed slice.', code: 'invalid_inventory_print' }, 400);
+    const totals = spoolUsage(usage, assignments), spools: Spool[] = structuredClone(inventory.document.spools);
+    const deductions: PrintRecord['usage'] = [];
+    for (const [spoolId, weight] of totals) {
+      const spool = spools.find(item => item.id === spoolId);
+      if (!spool) return json({ error: 'A selected spool was deleted. Choose another spool.', code: 'inventory_spool_missing' }, 409);
+      if (weight > spool.remainingGrams) return json({ error: `Not enough filament remains on ${spool.name}.`, code: 'insufficient_filament' }, 409);
+      spool.remainingGrams = Math.round((spool.remainingGrams - weight) * 1000000) / 1000000;
+      deductions.push({ spoolId, name: spool.name, grams: weight });
+    }
+    const record = { id: input.printId, jobId: input.jobId, name: input.name, at: Date.now(), usage: deductions, digest };
+    s.inventory = { revision: inventory.revision + 1, document: { spools } };
+    s.inventoryPrints ??= {}; s.inventoryPrints[input.printId] = record;
+    save(s);
+    return json({ print: record, ...s.inventory });
   }
   if (path === 'filament-inventory') {
     const inventory = s.inventory ?? { revision: 0, document: { spools: [] } };

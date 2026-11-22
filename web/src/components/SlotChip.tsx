@@ -3,6 +3,7 @@ import { filamentColor } from '../plater/filamentColor';
 import { EMPTY_SLOT_COLOUR, reportedTray } from '../profiles/filament-colour';
 import { profileInfo } from '../profiles/view';
 import { getState, useStore, type State } from '../state/store';
+import { useInventory } from '../filament-inventory/store';
 import './menu.css';
 import { slotFilaments } from '../profiles/slots';
 import { InLayer } from './PageLayer';
@@ -32,14 +33,18 @@ export function SlotPicker({ value, onChange, label, disabled = false, inherit, 
   inherit?: number;
   painted?: number[];
 }) {
-  const slots = useSlots();
+  const links = useStore((s) => s.slotSpools), inventory = useInventory();
+  const slots = useSlots().map((slot) => {
+    const spool = inventory.document.spools.find((item) => item.id === links[slot.n - 1]);
+    return spool ? { ...slot, name: `${spool.colourName} · ${spool.name}` } : slot;
+  });
   const shown = value || inherit || 1, colour = slots[shown - 1]?.colour ?? '#808080';
   const paints = painted.filter((n) => n !== shown);
   const parts = [shown, ...paints];
   const chip = paints.length ? <span className="slot-split" aria-hidden>{parts.map((n) => { const c = slots[n - 1]?.colour ?? '#808080';
     return <span key={n} data-ink={inkOn(c)} style={{ backgroundColor: c }}>{n}</span>; })}</span>
     : <SlotChip n={shown} colour={colour} />;
-  const named = `${label}: slot ${shown}${paints.length ? `, painted ${paints.join(', ')}` : ''}`;
+  const named = `${label}: slot ${shown}, ${slots[shown - 1]?.name ?? ''}${paints.length ? `, painted ${paints.join(', ')}` : ''}`;
   if (slots.length < 2 && !inherit) return <span className="slot-pick" role="img" aria-label={named}>{chip}</span>;
   return (
     <Menu.Root>

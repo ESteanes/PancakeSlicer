@@ -71,6 +71,7 @@ func NewServer(c Config, jobs *JobManager, catalog *resolve.Catalog) http.Handle
 	workspace := &workspaceStore{root: filepath.Join(c.DataDir, "workspace")}
 	workspace.register(mux)
 	s.workspace = workspace
+	s.filamentPrintRoutes(mux)
 	s.versionRoutes(mux)
 	s.blobs = &blobStore{root: filepath.Join(c.DataDir, "blobs"), limit: blobCacheBytes}
 	s.blobs.register(mux, c.MaxUploadSize)

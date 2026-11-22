@@ -112,6 +112,7 @@ export async function decode(doc: StoredDoc, get: (key: string) => Promise<Blob 
   const own = documentStrip(doc as Parameters<typeof documentStrip>[0]);
   const { plateSetup, ...moved } = movePlateSetup(state as typeof state & { bedType?: string; flush?: { matrix?: number[] | null } });
   void import('../profiles/plate-setup-move').then((m) => m.adoptStoredPlateSetup(plateSetup, String(doc.printer ?? ''), doc.projectName ?? 'This project'));
-  return { ...moved, processVariant: doc.processVariant ?? null, objects, projectPlates, project: doc.project ? (blobs.get(doc.project) as File) : null,
+  const slotSpools = (Array.isArray(doc.slotSpools) ? doc.slotSpools : []).map((spool) => typeof spool === 'string' ? spool : null);
+  return { ...moved, slotSpools, processVariant: doc.processVariant ?? null, objects, projectPlates, project: doc.project ? (blobs.get(doc.project) as File) : null,
     projectSlots: own ? { filaments: own.filaments, colours: own.colours, mixes: own.mixes } : null };
 }

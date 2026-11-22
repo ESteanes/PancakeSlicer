@@ -20,6 +20,12 @@ const listeners = new Set<() => void>();
 const publish = (patch: Partial<Snapshot>) => { current = { ...current, ...patch }; listeners.forEach((listener) => listener()); };
 const subscribe = (listener: () => void) => { listeners.add(listener); return () => { listeners.delete(listener); }; };
 export const useInventory = () => useSyncExternalStore(subscribe, () => current);
+export const inventorySnapshot = () => current;
+export function acceptInventory(value: unknown) {
+  if (operation || running) return;
+  const next = readInventory(value);
+  if (next.revision >= current.revision) publish({ ...next, state: 'ready', error: null, pending: false, loaded: true });
+}
 
 function readInventory(value: unknown): { revision: number; document: Inventory } {
   const data = value as { revision?: number; document?: Partial<Inventory> } | null;

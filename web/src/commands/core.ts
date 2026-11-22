@@ -18,6 +18,7 @@ import { setThemePref } from '../theme';
 import { canEditLayers } from '../components/LayerHeight';
 import { registerCommand, type Command } from './registry';
 import { reportProblem } from '../build-info';
+import { sliceFilamentUsage } from '../filament-inventory/model';
 
 const s = getState;
 const objects = () => s().objects.length > 0 || 'Add a model first';
@@ -76,6 +77,7 @@ export const CORE: Command[] = [
   { id: 'edit.rename', title: 'Rename', group: 'Edit', keys: 'F2', enabled: selection, run: () => startRename() },
   { id: 'edit.prefs', title: 'Preferences', group: 'Edit', keys: 'Mod+P', keywords: 'settings options', run: app('preferences') },
   { id: 'filament.inventory', title: 'Filament inventory', group: 'Filament', keywords: 'spools stock colours colors remaining weight material usage', run: app('inventory') },
+  { id: 'filament.recordPrint', title: 'Record print', group: 'Filament', keywords: 'deduct inventory spool usage weight printed', enabled: () => canExport(s()) && !s().job.calib && !!sliceFilamentUsage(s().job.status?.record) || 'Slice the plate first', run: app('recordPrint') },
 
   { id: 'obj.arrange', title: 'Arrange all', group: 'Object', keys: 'A', keywords: 'layout pack', enabled: objects, run: () => arrangeAll(true), boost: 30 },
   { id: 'obj.arrangeplate', title: 'Arrange this plate', group: 'Object', keys: 'Shift+A', enabled: objects, run: () => arrangeAll(false) },

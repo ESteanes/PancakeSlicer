@@ -23,6 +23,10 @@ type filamentSpool struct {
 
 var inventoryColour = regexp.MustCompile(`^#[0-9a-fA-F]{6}$`)
 
+type filamentInventory struct {
+	Spools []filamentSpool `json:"spools"`
+}
+
 func filamentInventoryDocument(raw json.RawMessage) (json.RawMessage, error) {
 	var doc struct {
 		Spools *[]filamentSpool `json:"spools"`

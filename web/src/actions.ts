@@ -237,7 +237,7 @@ export async function openProject(file: File) {
 
 export function clearPlate(preserveProfiles = false) {
   clearPlateJobs();
-  setState(() => ({ objects: [], selected: null, gizmo: 'none', project: null, projectPlates: [], plateIndex: 1, wipeTowerPos: {}, projectName: null, projectMaterials: null, projectSlotValues: null, projectSlots: null, events: [], ...(preserveProfiles ? {} : { projectPresets: null }), job: IDLE_JOB }));
+  setState(() => ({ objects: [], selected: null, gizmo: 'none', project: null, projectPlates: [], plateIndex: 1, wipeTowerPos: {}, projectName: null, slotSpools: [], projectMaterials: null, projectSlotValues: null, projectSlots: null, events: [], ...(preserveProfiles ? {} : { projectPresets: null }), job: IDLE_JOB }));
 }
 
 let creatingProject:Promise<boolean>|null=null;

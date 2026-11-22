@@ -22,7 +22,7 @@ import { findProfile,profileKey } from '../profiles/identity';
 import type { PrinterConnections } from '../printers/connections';
 export { PRESET_META } from '../profiles/model';
 import { resolvedProfile, selectionValues, type ProfileBase } from '../profiles/view';
-import { slotFilaments } from '../profiles/slots';
+import { slotFilaments, stripOf } from '../profiles/slots';
 export { selectCompatibility } from '../profiles/compatibility';
 
 
@@ -229,10 +229,11 @@ export interface State {
   renaming: number | null;
   meshErrors: Record<number, number>;
   clipboard: PlateObject[];
+  slotSpools: (string | null)[];
   processVariant: { layerHeight: number } | null;
   projectMaterials: { colours: string[]; matrix: number[] | null; multiplier: number | null; builds?: { object: number; instance: number }[] } | null;
   flushDialog: boolean;
-  appDialog: 'about' | 'preferences' | 'shortcuts' | 'send' | 'setup' | 'plate' | 'clone' | 'simplify' | 'inventory' | 'objectTable' | 'createPrinter' | 'mixed' | 'what' | null;
+  appDialog: 'about' | 'preferences' | 'shortcuts' | 'send' | 'setup' | 'plate' | 'clone' | 'simplify' | 'inventory' | 'recordPrint' | 'objectTable' | 'createPrinter' | 'mixed' | 'what' | null;
   calibDialog: CalibMenu | null;
   printerConnections: PrinterConnections;
   events: LayerEvent[];
@@ -326,6 +327,7 @@ let state: State = {
   renaming: null,
   meshErrors: {},
   clipboard: [],
+  slotSpools: [],
   
   processVariant: null,
   projectMaterials: null,
@@ -361,6 +363,16 @@ export const getState = () => state;
 export function setState(patch: Partial<State> | ((s: State) => Partial<State>)) {
   const finishTiming = timeInteraction('store');
   let next = { ...state, ...(typeof patch === 'function' ? patch(state) : patch) };
+  if (next.slotSpools === state.slotSpools && (next.printer !== state.printer || next.records !== state.records)) {
+    const before = stripOf(state), after = stripOf(next);
+    if (before.ids.length) {
+      const spools = after.ids.map((id, i) => {
+        const j = next.printer === state.printer && id !== undefined ? before.ids.indexOf(id) : -1;
+        return j >= 0 && after.filaments[i] === before.filaments[j] && after.colours[i] === before.colours[j] ? state.slotSpools[j] ?? null : null;
+      });
+      if (JSON.stringify(spools) !== JSON.stringify(state.slotSpools)) next.slotSpools = spools;
+    }
+  }
   const selected = next.selected;
   if (selected && !next.objects.some((o) => o.id === selected.object && o.instances.some((i) => i.id === selected.instance))) {
     next.selected = null;

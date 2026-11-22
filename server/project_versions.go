@@ -412,7 +412,7 @@ func (s *Server) versionRoutes(mux *http.ServeMux) {
 				return
 			}
 			doc := map[string]json.RawMessage{}
-			for _, k := range []string{"printer", "process", "filamentSlots", "slotColours", "mixes", "filamentEdits", "projectPresets"} {
+			for _, k := range []string{"printer", "process", "filamentSlots", "slotColours", "slotSpools", "mixes", "filamentEdits", "projectPresets"} {
 				if x, ok := rec.Doc[k]; ok {
 					doc[k] = x
 				}

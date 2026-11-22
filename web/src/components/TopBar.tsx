@@ -37,6 +37,7 @@ import { sliceAllMethods, useMethods } from '../methods';
 import { settingsChangedSinceSlice } from '../compare-settings';
 import { useMachine } from '../flow/fsm';
 import { choicePending, OFFER_UNDECIDED, projectSlots } from '../flow/project-slots';
+import { sliceFilamentUsage } from '../filament-inventory/model';
 
 type MenuItem = MenuEntry;
 function Menu({title, items}: {title: string; items: MenuItem[]}) { return <MenuButton label={title} items={items} className="menu-title" />; }
@@ -212,6 +213,7 @@ export function TabBar() {
   const exportAllEnabled = useStore((s) => s.projectPlates.length > 1 && !busy && exportablePlates(s).length > 0);
   const tier = useTier(), wide = tier === 'wide', coarse = window.matchMedia('(pointer: coarse)').matches, folded = tier === 'narrow' || tier === 'phone' || (tier === 'medium' && coarse);
   const ready = job.state === 'done' && !job.stale && exportEnabled && !folded;
+  const recordEnabled = exportEnabled && !job.calib && !!sliceFilamentUsage(job.status?.record);
   const sliceClass = `${ready ? 'btn' : 'btn-primary'} slant${busy ? ' slicing' : ''}`, exportClass = `${ready ? 'btn-primary' : 'btn'} slant`;
   const progress = busy ? { '--p': `${Math.round(job.pct)}%` } as CSSProperties : undefined;
   const allSlice = wide && plates && sliceMode === 'Slice all';
@@ -220,6 +222,7 @@ export function TabBar() {
   const sliceMethods: MenuEntry = {label: 'Slice all methods', action: () => void sliceAllMethods(), disabled: !hasObjects || !printer || busy || !!outside};
   const allExport = wide && plates && exportMode === 'all';
   const more: MenuEntry[] = [
+    ...(folded && job.state === 'done' ? [{ label: 'Record print', action: () => setState({ appDialog: 'recordPrint' }), disabled: !recordEnabled }] : []),
     ...(folded ? [sliceMethods] : []),
     ...(folded && changed ? [{label: 'Slice and compare', action: compareSlice, disabled: !printer || busy || !!outside, tip: 'Slice with your updated settings and compare side by side with the previous slice'}] : []),
     ...(folded ? [{label: exportLabel, action: download, disabled: !exportEnabled, tip: job.stale ? STALE_RESULT_TIP : 'Slice the plate first'}] : []),
@@ -275,6 +278,7 @@ export function TabBar() {
           </button>
         )}
         </span>}
+        {!folded && job.state === 'done' && <button type="button" className="btn slant" disabled={!recordEnabled} onClick={() => setState({ appDialog: 'recordPrint' })}>Record print</button>}
         {more.length > 0 && <MenuButton className="btn slant output-overflow" label="More output actions" items={more}><Glyph name="more"/></MenuButton>}
         </>}
       </div>

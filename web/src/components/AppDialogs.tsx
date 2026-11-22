@@ -14,6 +14,7 @@ const PlateSettings = preloadable(() => import('./PlateSettings'));
 const CloneDialog = preloadable(() => import('./CloneDialog'));
 const SimplifyDialog = preloadable(() => import('./SimplifyDialog'));
 const InventoryDialog = preloadable(() => import('../filament-inventory/InventoryDialog'));
+const RecordPrintDialog = preloadable(() => import('../filament-inventory/RecordPrintDialog'));
 const ObjectTable = preloadable(() => import('./ObjectTable'));
 const CreatePrinter = preloadable(() => import('./CreatePrinter'));
 const SendDialog = preloadable(() => import('./SendDialog'));
@@ -135,7 +136,8 @@ function Shortcuts() {
   );
 }
 
-export default function AppDialog({ which }: { which: 'about' | 'preferences' | 'shortcuts' | 'send' | 'setup' | 'what' | 'plate' | 'clone' | 'simplify' | 'inventory' | 'objectTable' | 'createPrinter' | 'mixed' }) {
+export default function AppDialog({ which }: { which: 'about' | 'preferences' | 'shortcuts' | 'send' | 'setup' | 'what' | 'plate' | 'clone' | 'simplify' | 'inventory' | 'recordPrint' | 'objectTable' | 'createPrinter' | 'mixed' }) {
+  if (which === 'recordPrint') return <Suspense fallback={null}><RecordPrintDialog close={close} /></Suspense>;
   if (which === 'inventory') return <Suspense fallback={null}><InventoryDialog close={close} /></Suspense>;
   if (which === 'mixed') return <Suspense fallback={null}><MixedFilaments close={close} /></Suspense>;
   if (which === 'createPrinter') return <Suspense fallback={null}><CreatePrinter close={close} /></Suspense>;

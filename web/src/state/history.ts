@@ -5,7 +5,7 @@ import { getState, setState, type PlateObject, type State } from './store';
 
 const DOC_KEYS = [
   'objects', 'projectPlates', 'plateIndex', 'project', 'projectName', 'projectMaterials', 'projectPresets', 'projectSlotValues', 'projectSlots',
-  'events', 'printer', 'process', 'dirty', 'filamentEdits', 'selected',
+  'events', 'slotSpools', 'printer', 'process', 'dirty', 'filamentEdits', 'selected',
   'wipeTowerPos', 'processVariant', 'profileSnapshots', 'projectProfileContexts',
 ] as const satisfies readonly (keyof State)[];
 export type Doc = Pick<State, (typeof DOC_KEYS)[number]>;

@@ -44,6 +44,22 @@
 :where(.orca-parity) .inventory-hint { margin: 0; font: var(--t-small); color: var(--ink-3); }
 :where(.orca-parity) .inventory-error { padding: 12px; border: 1px solid var(--danger); border-radius: var(--r-2); background: var(--danger-tint); }
 :where(.orca-parity) .inventory-error p { margin: 0 0 8px; overflow-wrap: anywhere; }
+:where(.orca-parity) .inventory-slot-group, :where(.orca-parity) .inventory-slot { display: grid; gap: 4px; min-width: 0; }
+:where(.orca-parity) .inventory-slot { margin: 0 0 4px 32px; }
+:where(.orca-parity) .inventory-slot .dropdown { width: 100%; min-width: 0; font: var(--t-small); }
+:where(.orca-parity) .inventory-print-table-wrap { overflow-x: auto; }
+:where(.orca-parity) .inventory-print-table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+:where(.orca-parity) .inventory-print-table :is(th, td) { padding: 12px 8px; text-align: right; border-bottom: 1px solid var(--line); }
+:where(.orca-parity) .inventory-print-table th:first-child { text-align: left; min-width: 140px; overflow-wrap: anywhere; }
+:where(.orca-parity) .inventory-print-table td { white-space: nowrap; }
+:where(.orca-parity) .inventory-print-table small { display: block; font: var(--t-small); color: var(--ink-3); }
+:where(.orca-parity) .inventory-print-table .inventory-dot { display: inline-block; margin-right: 8px; }
+:where(.orca-parity) .inventory-print-issues { margin: 0; padding-left: 20px; color: var(--status-warn); }
+:where(.orca-parity) .inventory-print-issues li + li { margin-top: 6px; }
+:where(.orca-parity) .inventory-print-success { color: var(--success) !important; }
+:where(.orca-parity) .inventory-print-history ul { display: grid; gap: 8px; padding: 0; list-style: none; }
+:where(.orca-parity) .inventory-print-history li { display: grid; gap: 4px; padding: 8px; border-bottom: 1px solid var(--line); }
+:where(.orca-parity) .inventory-print-history time { color: var(--ink-3); }
 @media (max-width: 700px) {
   :where(.orca-parity) .inventory-filters { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   :where(.orca-parity) .inventory-filters > input { grid-column: 1 / -1; }

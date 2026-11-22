@@ -11,7 +11,35 @@ export interface Spool {
 }
 
 export const grams = (weight: number) => `${weight.toLocaleString(undefined, { maximumFractionDigits: 1 })} g`;
+export const materialKey = (value: string) => value.trim().toUpperCase();
 export const stockStatus = (spool: Spool) => spool.remainingGrams === 0 ? 'empty' : spool.remainingGrams <= spool.capacityGrams * 0.1 ? 'low' : 'available';
+
+export interface FilamentUsage { slot: number; grams: number }
+export interface SpoolAssignment { slot: number; spoolId: string }
+export interface PrintRequest { printId: string; jobId: string; name: string; expectedRevision: number; assignments: SpoolAssignment[] }
+export interface PrintRecord { id: string; jobId: string; name: string; at: number; usage: { spoolId: string; name: string; grams: number }[] }
+
+export function sliceFilamentUsage(record: unknown): FilamentUsage[] | null {
+  const rows = (record as { statistics?: { per_extruder?: unknown } } | null)?.statistics?.per_extruder;
+  if (!Array.isArray(rows) || !rows.length || rows.length > 256) return null;
+  const seen = new Set<number>(), usage: FilamentUsage[] = [];
+  for (const row of rows) {
+    if (!row || !Number.isInteger(row.extruder_id) || row.extruder_id < 0 || row.extruder_id > 255 || seen.has(row.extruder_id)
+      || typeof row.used_filament_g !== 'number' || !Number.isFinite(row.used_filament_g) || row.used_filament_g < 0 || row.used_filament_g > 1000000) return null;
+    seen.add(row.extruder_id);
+    if (row.used_filament_g > 0) usage.push({ slot: row.extruder_id, grams: row.used_filament_g });
+  }
+  return usage.length ? usage.sort((a, b) => a.slot - b.slot) : null;
+}
+
+export function spoolUsage(usage: FilamentUsage[], assignments: SpoolAssignment[]): Map<string, number> {
+  const totals = new Map<string, number>();
+  for (const row of usage) {
+    const id = assignments.find((assignment) => assignment.slot === row.slot)?.spoolId;
+    if (id) totals.set(id, (totals.get(id) ?? 0) + row.grams);
+  }
+  return new Map([...totals].map(([id, weight]) => [id, Math.ceil(weight * 1000) / 1000]));
+}
 
 export function spoolError(spool: Spool): string | null {
   if (typeof spool.id !== 'string' || !/^[A-Za-z0-9._-]{1,200}$/.test(spool.id) || spool.id === '.' || spool.id === '..') return 'Invalid spool ID.';
