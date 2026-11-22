@@ -110,9 +110,9 @@ export function ImportDialog() {
                     {r.matches && r.matches.length > 0 && !done && <Dropdown className="combo" aria-label={`What ${r.name} does`} value={r.pick ?? ''}
                       options={[{ value: '', label: 'Add as new' }, ...r.matches.map((m) => ({ value: m.id, label: `Replace ${m.name}, ${editedAt(m)}, ${differ(m)}` }))]}
                       onValueChange={(pick) => setRows(rows.map((x, j) => { if (j !== i) return x; const m = x.matches?.find((y) => y.id === pick);
-                        const status = !m ? 'new' as const : m.differ === 0 && m.name === x.name ? 'unchanged' as const : 'replace' as const;
+                        const status = m ? 'replace' as const : 'new' as const;
                         const note = !m ? x.addedNote : `Replaces ${m.name} (${editedAt(m)})`;
-                        return { ...x, pick, record: m ? m.record : x.added, status, note, checked: status !== 'unchanged' }; }))}/>}
+                        return { ...x, pick, record: m ? m.record : x.added, status, note, checked: true }; }))}/>}
                     {r.notStored.length > 0 && <details className="import-not-stored"><summary>{r.notStored.length} not stored</summary><ul>{r.notStored.map((k) => <li key={k}>{k}</li>)}</ul></details>}
                   </td>
                 </tr>
