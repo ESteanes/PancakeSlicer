@@ -333,7 +333,11 @@ func (s *Server) putConnection(w http.ResponseWriter, r *http.Request) {
 	}
 	m := s.sends
 	prev := m.printer(key)
-	sp := storedPrinter{Printer: key, TLS: map[bool]string{true: "tofu"}[body.Kind == "bambu-lan"], Model: body.Model}
+	model := ""
+	if body.Kind == "bambu-lan" || body.Kind == "elegoolink" {
+		model = body.Model
+	}
+	sp := storedPrinter{Printer: key, TLS: map[bool]string{true: "tofu"}[body.Kind == "bambu-lan"], Model: model}
 	if prev != nil {
 		sp.ID = prev.id
 		if prev.Kind == body.Kind {
