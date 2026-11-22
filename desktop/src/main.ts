@@ -450,9 +450,15 @@ async function openInBambuConnect(jobId: unknown, filename: unknown) {
 function deviceHttpUrl(address: unknown) {
   const url = typeof address === 'string' ? URL.parse(address) : null;
   if (!url || !['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.port === DESKTOP_PORT) return null;
+  const host = url.hostname.toLowerCase().replace(/^\[|\]$/g, '');
+  if (host === 'localhost' || host.endsWith('.localhost') || host === '::1' || host === '127.0.0.1' || host.startsWith('127.')) return null;
   // Origins are interpolated into CSP source expressions.
   if (!/^(?:[a-z0-9.-]+|\[[0-9a-f:]+\])$/.test(url.hostname)) return null;
   return url;
+}
+
+function hasParentFrame(details: Electron.OnBeforeRequestListenerDetails): boolean {
+  try { return !!details.frame?.parent; } catch { return true; }
 }
 
 function restrictNetwork(target: Electron.Session, appContents?: Electron.WebContents) {
@@ -482,7 +488,7 @@ function restrictNetwork(target: Electron.Session, appContents?: Electron.WebCon
       && url.pathname === '/repos/ZimengXiong/PancakeSlicer/releases' && url.search === '?per_page=30';
     const embedded = ['blob:', 'data:', 'devtools:'].includes(url.protocol);
     const allow = (initiatorOrigin === undefined || initiatorOrigin === DESKTOP_ORIGIN)
-      && !details.frame?.parent && (local || update || embedded);
+      && !hasParentFrame(details) && (local || update || embedded);
     if (!allow) console.error(`Blocked outbound request: ${url.origin}${url.pathname}`);
     callback({ cancel: !allow });
   });
