@@ -54,8 +54,6 @@ export async function acceptSharedRecord(record: SharedRecord, submitted?: Doc) 
   const pending = sharedChanges(before, splitShared(current, before));
   const reuse = submitted ? { doc: encode(submitted).stored, state: submitted }
     : baseline ? { doc: baseline.record.doc as StoredDoc, state: baseline.live } : undefined;
-  await (await import('../profiles/catalog-startup')).ensureProjectCatalogs(record.doc as StoredDoc,
-    () => generation === documentGeneration() && project.get().context.id === id);
   const fields = await decode(record.doc as StoredDoc, readAsset, reuse);
   if (generation !== documentGeneration() || project.get().context.id !== id) return;
   if (!submitted && (project.get().value !== 'saved' || historyEditing() || versionView.get().value !== 'latest')) return;
@@ -125,7 +123,7 @@ function checkEdit(before: State, after: State): boolean {
     const message = !status.connected ? 'Reconnect to the project before editing.' : syncing || status.revision > state.context.revision ? 'Wait for the latest shared changes to finish loading.'
       : lock && lock.session !== sessionId ? `Currently being edited by ${lock.label}.`
       : missing?.key === 'settings' ? 'Click Edit settings to change shared settings.' : 'Click Edit selected objects, or Edit whole project for an operation affecting several objects.';
-    queueMicrotask(() => toast(message));
+    queueMicrotask(() => toast('shared_editing_blocked', { detail: message }));
   }
   return false;
 }

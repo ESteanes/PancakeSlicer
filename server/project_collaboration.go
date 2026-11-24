@@ -34,11 +34,15 @@ func (st *workspaceStore) validProjectSnapshot(snapshot projectSnapshotRef) bool
 	}
 	st.mu.Lock()
 	defer st.mu.Unlock()
-	index, err := st.readVersions(snapshot.ID)
+	d, err := st.read()
 	if err != nil {
 		return false
 	}
-	for _, version := range index.Versions {
+	p, ok := d.Projects[snapshot.ID]
+	if !ok {
+		return false
+	}
+	for _, version := range p.history().Versions {
 		if version.ID == snapshot.Version && version.Revision == snapshot.Revision && version.Sealed {
 			return true
 		}
@@ -516,25 +520,30 @@ func (st *workspaceStore) applyProjectChanges(w http.ResponseWriter, r *http.Req
 			json.Unmarshal(in.Checkpoint, &checkpoint)
 			record.Doc["recoveryCheckpoint"] = checkpoint
 		}
-		p.Revision++
 		record.Meta["savedAt"] = time.Now().UnixMilli()
 		if len(in.Thumbnail) > 0 {
 			var thumbnail any
 			json.Unmarshal(in.Thumbnail, &thumbnail)
 			record.Meta["thumbnail"] = thumbnail
 		}
-		p.Record, err = projectRecord(jsonValue(record), id, p.Revision)
+		next, err := withRecord(p, id, jsonValue(record), p.Revision+1)
 		if err == nil {
-			err = st.checkAssets(p.Record)
+			err = st.checkAssets(next.Record)
 		}
 		if err != nil {
 			workspaceFailure(w, 400, "project_invalid", err.Error(), "reload", p.Revision)
 			return
 		}
-		d.Projects[id] = p
-		response := map[string]any{"revision": p.Revision, "operationId": in.OperationID}
+		sha, err := st.keepRecord(id, next.Record)
+		if err != nil {
+			workspaceFailure(w, 507, "workspace_write_failed", "Uh-oh, couldn't save your work ("+storageCause(err)+"). Keep your draft safe, free up a bit of storage, and retry!", "free_storage_and_retry", p.Revision)
+			return
+		}
+		next.Versions = withVersion(next, next.Revision, sha, next.Record, in.Change, "save", time.Now().UnixMilli())
+		d.Projects[id] = next
+		response := map[string]any{"revision": next.Revision, "operationId": in.OperationID}
 		if st.commit(w, d, in.OperationID, digest, response) {
-			st.recordVersion(id, p.Revision, p.Record, in.Change, "save")
+			st.pruneVersionFiles(id, next.Versions)
 		}
 	})
 }

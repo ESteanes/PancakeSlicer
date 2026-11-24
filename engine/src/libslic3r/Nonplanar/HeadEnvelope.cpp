@@ -1,4 +1,5 @@
 #include "HeadEnvelope.hpp"
+#include "libslic3r/BoundingBox.hpp"
 #include "libslic3r/Point.hpp"
 #include <boost/filesystem/directory.hpp>
 
@@ -324,6 +325,35 @@ double HeadEnvelope::reach() const
             r = std::max(r, std::hypot(std::max(std::abs(lo.x()), std::abs(hi.x())), std::max(std::abs(lo.y()), std::abs(hi.y()))));
         }
     return r;
+}
+
+std::vector<LowBox> low_boxes(const HeadEnvelope &head, double gap, double max_relief)
+{
+    std::vector<LowBox> out;
+    for (const HeadBox &box : head.boxes) {
+        if (box.nozzle)
+            continue;
+        const double floor = gap + box.min.z() - head.margin;
+        if (floor >= max_relief)
+            continue;
+        const double grow = head.lateral_margin;
+        out.push_back({ Vec2d(box.min.x() - grow, box.min.y() - grow), Vec2d(box.max.x() + grow, box.max.y() + grow), floor,
+                        box.infinite_x, box.infinite_y });
+    }
+    return out;
+}
+
+bool conflicts(const std::vector<LowBox> &boxes, const BoundingBoxf &source, const BoundingBoxf &neighbor, double max_floor)
+{
+    for (const LowBox &box : boxes) {
+        if (box.floor >= max_floor)
+            continue;
+        const bool x = box.infinite_x || (source.min.x() + box.min.x() < neighbor.max.x() && source.max.x() + box.max.x() > neighbor.min.x());
+        const bool y = box.infinite_y || (source.min.y() + box.min.y() < neighbor.max.y() && source.max.y() + box.max.y() > neighbor.min.y());
+        if (x && y)
+            return true;
+    }
+    return false;
 }
 
 bool operator==(const HeadBox &lhs, const HeadBox &rhs)
@@ -732,7 +762,7 @@ static HeadEnvelope resolve_head_shape(const PrintConfig &config, std::string *w
             return *head;
     if (warning != nullptr)
         *warning = id.empty() ? _u8L("This printer doesn't have a specific print head profile yet, so we're using the safe generic print head.")
-                              : (boost::format(_u8L("Couldn't find or load print head profile \"%1%\", so we're using the safe generic print head instead.")) % id).str();
+                              : (boost::format(_u8L("Oops! Couldn't find or load print head profile \"%1%\", so we're falling back to the safe generic print head.")) % id).str();
     return HeadLibrary::generic_conservative();
 }
 

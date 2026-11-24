@@ -1,32 +1,25 @@
 import { beginBusy } from '../state/busy';
 import * as THREE from 'three';
-import { getState, newId, setState, toast, type PlateObject, type State, type SvgSpec, type Volume, type VolumeType } from '../state/store';
+import { getState, newId, setState, toast, type PlateObject, type SvgSpec, type Volume, type VolumeType } from '../state/store';
 import { undoable } from '../state/history';
 import { bedArea } from '../actions';
 import { bakeStl, bedBounds, nextFreeSpot } from './geometry';
 import { meshJob } from './meshOps';
 import { placeVolume } from './volumes';
 import { inFrame, surfaceFields } from './text';
+import { pickFiles } from '../file-picker';
 
 const NEW = { depth: 2, size: 30 };
-
-export const svgSurfaceOk = (s: State, type: VolumeType) => !!s.features.emboss_svg_surface && (type !== 'part' || !!s.features.emboss_surface_outside);
 
 const fields = (t: SvgSpec) => ({ depth: String(t.depth), ...(t.size ? { size: String(t.size) } : {}) });
 const svgBlob = (t: SvgSpec) => new Blob([t.svg], { type: 'image/svg+xml' });
 const warn = (record: Record<string, unknown>, name: string) => {
   const w = (record.warnings as string[] | undefined) ?? [];
-  if (w.length || record.best_effort) toast(`${name}: ${w.length ? w.join('; ') : 'best effort result'}`);
+  if (w.length || record.best_effort) toast('svg_failed', { name, value: w.length ? w.join('; ') : 'best effort result' });
 };
 
 function pick(): Promise<File | null> {
-  return new Promise((resolve) => {
-    const input = document.createElement('input');
-    input.type = 'file';
-    input.accept = '.svg,image/svg+xml';
-    input.onchange = () => resolve(input.files?.[0] ?? null);
-    input.click();
-  });
+  return new Promise((resolve) => pickFiles('.svg,image/svg+xml', (files) => resolve(files[0])));
 }
 
 let busy = false;
@@ -34,7 +27,7 @@ async function withService(work: () => Promise<void>) {
   if (busy) return;
   busy = true;
   const overlay = beginBusy('Embossing SVG');
-  try { await work(); } catch (e) { toast(`SVG: ${e instanceof Error ? e.message : String(e)}`); } finally {
+  try { await work(); } catch (e) { toast('svg', { detail: e instanceof Error ? e.message : String(e) }); } finally {
     busy = false;
     overlay.end();
   }

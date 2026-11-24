@@ -88,6 +88,7 @@
 #include "GCode/WipeTowerEstimate.hpp"
 #include "Utils.hpp"
 #include "HeapTrim.hpp"
+#include "Support/SupportCommon.hpp"
 #include "PrintConfig.hpp"
 #include "MaterialType.hpp"
 #include "Model.hpp"
@@ -552,6 +553,16 @@ bool Print::invalidate_state_by_config_options(const ConfigOptionResolver & , co
         for (PrintObject *object : m_objects)
             if (Nonplanar::deform_slice_considered(*object))
                 invalidated |= object->invalidate_step(posPerimeters);
+    if (std::any_of(opt_keys.begin(), opt_keys.end(), [](const t_config_option_key &key) {
+            return key == "nonplanar_collision_check" || key == "nonplanar_repair_iterations"; }))
+        for (PrintObject *object : m_objects)
+            if (object->m_nonplanar_repair || !object->m_curved_planar_surfaces.empty() || object->m_curved_fallback_off ||
+                object->m_curved_fallback_zaa) {
+                object->m_nonplanar_repair.reset();
+                object->m_curved_planar_surfaces.clear();
+                object->m_curved_fallback_off = object->m_curved_fallback_zaa = false;
+                invalidated |= object->invalidate_step(posSlice);
+            }
 
     return invalidated;
 }
@@ -1529,7 +1540,8 @@ static StringObjectException layered_print_cleareance_valid(const Print &print, 
     for (Polygon &p : printable_polys)
         p.translate(plate_shift);
     if (!diff(tower_polys_checked, printable_polys).empty())
-        return {L("Prime Tower") + L(" is partially outside the printable area, and it cannot be printed.\n")};
+        return { L("Prime Tower") + L(" is partially outside the printable area, and it cannot be printed.\n"), nullptr, "", STRING_EXCEPT_NOT_DEFINED,
+                 false, {}, { "outside_print_volume", {}, R"({"part":"prime_tower"})" } };
     if (warning && !diff(tower_polys_estimated, printable_polys).empty())
         warning->string += L("Prime Tower") + L(" is partially outside the printable area, and it cannot be printed.\n");
     return {};
@@ -1780,7 +1792,7 @@ StringObjectException Print::validate(std::vector<StringObjectException> *warnin
         return {std::string()};
 
     if (extruders.empty())
-        return { L("No extrusions under current settings.") };
+        return { L("No extrusions under current settings."), nullptr, "", STRING_EXCEPT_NOT_DEFINED, false, {}, { "no_printable_layers" } };
 
     if (m_config.is_imex.value && !m_objects.empty()) {
         const std::string& parallel_mode = m_objects.front()->config().imex_parallel_mode.value;
@@ -2063,7 +2075,8 @@ StringObjectException Print::validate(std::vector<StringObjectException> *warnin
             return StringObjectException{
                 Slic3r::format(_u8L("While the object %1% itself fits the build volume, it exceeds the maximum build volume height because of material shrinkage compensation."), print_object.model_object()->name),
                 print_object.model_object(),
-                ""
+                "", STRING_EXCEPT_NOT_DEFINED, false, {},
+                { "outside_print_volume", warning_object(print_object.model_object()->name), R"({"axis":"z","cause":"shrinkage"})" }
             };
         } else if (effective_max_z > this->config().printable_height + EPSILON) {
             return StringObjectException{
@@ -2072,7 +2085,8 @@ StringObjectException Print::validate(std::vector<StringObjectException> *warnin
                 " " + _u8L("You might want to reduce the size of your model or change current print settings and retry.") :
                 Slic3r::format(_u8L("The object %1% exceeds the maximum build volume height."), print_object.model_object()->name),
                 print_object.model_object(),
-                ""
+                "", STRING_EXCEPT_NOT_DEFINED, false, {},
+                { "outside_print_volume", warning_object(print_object.model_object()->name), R"({"axis":"z"})" }
             };
         }
     }
@@ -2423,6 +2437,10 @@ StringObjectException Print::validate(std::vector<StringObjectException> *warnin
                     }
                     return warning_key;
                 };
+                auto capped = [&](const char *code, const std::string &key, double limit) {
+                    return WarningCode{ code, {}, nlohmann::json{ { "option", key }, { "requested", m_default_object_config.get_abs_value_at(key, extruder_id) },
+                                                                  { "limit", limit } }.dump() };
+                };
                 auto check_motion_ability_region_setting = [&](const std::vector<std::string>& keys_to_check, double limit) -> std::string {
                     std::string warning_key;
                     for (const auto& key : keys_to_check) {
@@ -2450,6 +2468,7 @@ StringObjectException Print::validate(std::vector<StringObjectException> *warnin
                             warning_key = "default_jerk";
 
                        motion_warning.opt_key = warning_key;
+                       motion_warning.code    = { "jerk_low", {}, nlohmann::json{ { "option", warning_key } }.dump() };
                     }
 
                     if (warning_key.empty() && m_default_object_config.default_jerk.get_at(extruder_id) > 0) {
@@ -2464,6 +2483,7 @@ StringObjectException Print::validate(std::vector<StringObjectException> *warnin
                                 "Orca will automatically cap the jerk speed to ensure it doesn't surpass the printer's capabilities.\n"
                                 "You can adjust the maximum jerk setting in your printer's configuration to get higher speeds.");
                             motion_warning.opt_key = warning_key;
+                            motion_warning.code    = capped("jerk_capped", warning_key, max_jerk);
                        }
                     }
                 }
@@ -2474,6 +2494,7 @@ StringObjectException Print::validate(std::vector<StringObjectException> *warnin
                                           "Orca will automatically cap the junction deviation to ensure it doesn't surpass the printer's capabilities.\n"
                                           "You can adjust the machine_max_junction_deviation value in your printer's configuration to get higher limits.");
                     motion_warning.opt_key = "default_junction_deviation";
+                    motion_warning.code    = capped("junction_deviation_capped", "default_junction_deviation", max_junction_deviation);
                 }
                 
                 const auto max_accel = m_config.machine_max_acceleration_extruding.values[0];
@@ -2515,6 +2536,7 @@ StringObjectException Print::validate(std::vector<StringObjectException> *warnin
                                               "capabilities.\nYou can adjust the "
                                               "machine_max_acceleration_extruding value in your printer's configuration to get higher speeds.");
                         motion_warning.opt_key = warning_key;
+                        motion_warning.code    = capped("acceleration_capped", warning_key, max_accel);
                    }
                    if (support_travel_acc) {
                         const auto max_travel = m_config.machine_max_acceleration_travel.values[0];
@@ -2531,6 +2553,7 @@ StringObjectException Print::validate(std::vector<StringObjectException> *warnin
                                     "capabilities.\nYou can adjust the "
                                     "machine_max_acceleration_travel value in your printer's configuration to get higher speeds.");
                                 motion_warning.opt_key = warning_key;
+                                motion_warning.code    = capped("acceleration_capped", warning_key, max_travel);
                             }
                         }
                    }
@@ -3030,12 +3053,13 @@ void Print::process(long long *time_cost_with_cache, bool use_cache)
             for (size_t i = 0; i < m_objects.size(); ++i)
                 sup_was_done[i] = m_objects[i]->is_step_done(posSupportMaterial) ? 1 : 0;
 
+        const SupportNeighborFootprints support_neighbors(m_objects);
         tbb::parallel_for(tbb::blocked_range<int>(0, int(m_objects.size())),
-            [this, need_slicing_objects](const tbb::blocked_range<int>& range) {
+            [this, &support_neighbors, need_slicing_objects](const tbb::blocked_range<int>& range) {
                 for (int i = range.begin(); i < range.end(); i++) {
                     PrintObject* obj = m_objects[i];
                     if (need_slicing_objects.count(obj) != 0) {
-                        obj->generate_support_material(false);
+                        obj->generate_support_material(false, &support_neighbors);
                     }
                     else {
                         if (obj->set_started(posSupportMaterial))
@@ -3072,7 +3096,8 @@ void Print::process(long long *time_cost_with_cache, bool use_cache)
                     obj->contour_z();
                 else if (obj->set_started(posContouring))
                     obj->set_done(posContouring);
-                obj->generate_support_material(false);
+                const SupportNeighborFootprints updated_neighbors(m_objects);
+                obj->generate_support_material(false, &updated_neighbors);
             }
         for (PrintObject *obj : m_objects)
             obj->generate_belt_brim();
@@ -3122,10 +3147,16 @@ void Print::process(long long *time_cost_with_cache, bool use_cache)
                 obj->infill();
                 obj->ironing();
                 obj->nonplanar_shells();
-                obj->generate_support_material();
+            }
+        }
+        const SupportNeighborFootprints support_neighbors(m_objects);
+        for (PrintObject *obj : m_objects) {
+            if (re_slicing_objects.count(obj) != 0) {
+                obj->generate_support_material(true, &support_neighbors);
                 obj->detect_overhangs_for_lift();
                 obj->estimate_curled_extrusions();
-            }
+            } else if (!obj->get_shared_object())
+                obj->trim_support_paths_by_neighbors(support_neighbors);
         }
     }
 
@@ -3596,7 +3627,9 @@ std::string Print::export_gcode(const std::string& path_template, GCodeProcessor
         for (size_t i = 0; i < m_objects.size() && i < result->nonplanar_report.objects.size(); ++i) {
             const auto warnings = curved_access_warnings.find(m_objects[i]->id().id);
             if (warnings != curved_access_warnings.end())
-                append(result->nonplanar_report.objects[i].warnings, warnings->second);
+                for (const std::string &warning : warnings->second)
+                    result->nonplanar_report.objects[i].warnings.push_back(
+                        { { "curved_top_unreachable", warning_object(m_objects[i]->model_object()->name) }, warning });
         }
     }
     return path.c_str();
@@ -4924,7 +4957,8 @@ void Print::_make_wipe_tower()
             height = compacted_z.empty() ? 0. : compacted_z.back();
         }
         if (height > m_config.printable_height + EPSILON)
-            throw Slic3r::SlicingError(L("The sequential prime tower exceeds the maximum build volume height. Reduce the number of objects or disable the prime tower."));
+            throw Slic3r::SlicingError(L("The sequential prime tower exceeds the maximum build volume height. Reduce the number of objects or disable the prime tower."),
+                                       "outside_print_volume", "", R"({"axis":"z","part":"prime_tower"})");
     }
 
     if (m_wipe_tower_data.wipe_tower_mesh_data) {
@@ -4939,7 +4973,8 @@ void Print::_make_wipe_tower()
             BOOST_LOG_TRIVIAL(error) << boost::format("wipe tower footprint [%1%,%2%]-[%3%,%4%] leaves printable [%5%,%6%]-[%7%,%8%]") %
                 unscaled(fp.min.x()) % unscaled(fp.min.y()) % unscaled(fp.max.x()) % unscaled(fp.max.y()) %
                 unscaled(pr.min.x()) % unscaled(pr.min.y()) % unscaled(pr.max.x()) % unscaled(pr.max.y());
-            throw Slic3r::SlicingError(L("Prime Tower") + L(" is partially outside the printable area, and it cannot be printed.\n"));
+            throw Slic3r::SlicingError(L("Prime Tower") + L(" is partially outside the printable area, and it cannot be printed.\n"), "outside_print_volume", "",
+                                       R"({"part":"prime_tower"})");
         }
         if (!intersection(get_bed_excluded_area(m_config), Polygons{footprint}).empty())
             throw Slic3r::SlicingError(L("Prime Tower") + L(" is too close to an exclusion area, and collisions will be caused.\n"));

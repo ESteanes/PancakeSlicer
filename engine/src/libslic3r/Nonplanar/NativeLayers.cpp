@@ -1,4 +1,5 @@
 #include "NativeLayers.hpp"
+#include "libslic3r/Nonplanar/Research.hpp"
 
 #include "libslic3r/ClipperUtils.hpp"
 #include "libslic3r/Line.hpp"
@@ -33,9 +34,10 @@ struct EdgeHash
     size_t operator()(const Edge &e) const { return std::hash<uint64_t>()((uint64_t(uint32_t(e.first)) << 32) | uint32_t(e.second)); }
 };
 
-indexed_triangle_set refine(const indexed_triangle_set &in, double max_len)
+}
+
+indexed_triangle_set refine(indexed_triangle_set its, double max_len)
 {
-    indexed_triangle_set its = in;
     const float          max2 = float(max_len * max_len);
     for (int pass = 0; pass < 24; ++pass) {
         std::unordered_map<Edge, int, EdgeHash> mid;
@@ -92,6 +94,8 @@ indexed_triangle_set refine(const indexed_triangle_set &in, double max_len)
     }
     return its;
 }
+
+namespace {
 
 Vec3d edge_crossing(const LayerField &field, double level, Vec3d a, Vec3d b, double fa, double fb, double eps)
 {
@@ -374,7 +378,7 @@ Vec3d tool_axis(const LayerField &field, const Vec3d &p, double tilt_cap)
 {
     if (tilt_cap <= 0.)
         return Vec3d::UnitZ();
-    static const bool given = [] { const char *v = std::getenv("NP_FIELD_AXIS"); return v != nullptr && *v == '1'; }();
+    static const bool given = [] { const char *v = research_switch("NP_FIELD_AXIS"); return v != nullptr && *v == '1'; }();
     const std::optional<Vec3d> axis = given ? field.given_axis(p) : std::nullopt;
     Vec3d                      g    = axis ? *axis : field.gradient(p);
     if (g.squaredNorm() < 1e-24)

@@ -1,4 +1,8 @@
 import { tools } from '../flow/tools';
+import { onLeavePage } from '../flow/page';
+import { registerThumbnail } from '../persist/session';
+import { projectThumbnail } from '../projects/thumbnail';
+import { objectValues } from '../profiles/view';
 import { canManipulateObjects } from '../flow/collaboration';
 import { useEditingStatus } from '../persist/project-collaboration';
 import { takeProbedCanvas } from '../browser-support';
@@ -6,13 +10,14 @@ import { useEffect, useRef } from 'react';
 import * as THREE from 'three';
 import { CameraViews } from './CameraViews';
 import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js';
+import { selectionValues } from '../profiles/view';
 import { effectiveConfig, getState, isSelected, markStale, selectedObjectIds, selectionOf, toggleSelection, printerPreset, setPaint, setState, subscribeStore, updateInstance, updateObject, updateVolume, useStore, type CutConnector, type Instance, type PlateObject, type SeamMode, type State, type Volume, type VolumeType } from '../state/store';
 import { HOVER_COLOR, SELECTION_COLOR, SelectionBounds, selectedSurface } from './selectionVisual';
 import { PaintView } from './paintView';
 import { viewOptions, subscribeViewOptions } from './viewOptions';
 import { sectionView, subscribeSection } from './section';
 import { defaultEarRadius, earsUi, setEars, setEarsUi, subscribeEarsUi } from './brimEars';
-import { brush, bucketFill, fill as fillPaint, heightRange, HEIGHT, isPaint, overhangFacets, overhangGeometry, paintOf, paintTool, paintTriangle, PAINT_STEP, RADIUS, setPaintTool, subscribePaintTool, type PaintKind, type Painting } from './paint';
+import { brush, bucketFill, canUseLayerBrush, fill as fillPaint, heightRange, HEIGHT, isPaint, layerBrushBand, layerRange, LAYERS, overhangFacets, overhangGeometry, paintOf, paintTool, paintTriangle, PAINT_STEP, RADIUS, setPaintTool, subscribePaintTool, type PaintKind, type Painting } from './paint';
 import { beginStep, undoable } from '../state/history';
 import { TowerView } from './wipeTower';
 import { setTextPlacing, textPlacing } from './textPlacing';
@@ -37,6 +42,9 @@ import { layerCursor, layerParams, layerProfileOf, subscribeLayerCursor } from '
 import { layerMaterial } from './layerTexture';
 import { getPatchPreview, inFootprint, nonplanarViewShown, overlayFits, planarReason, subscribePatchPreview, type InstanceOverlay } from '../patch-preview';
 import { hoverSurface, selectSurface, subscribeTopSurfaces, surfaceAt, surfaceText, topSurfaces, topSurfacesShown } from '../top-surfaces';
+import { slotFilaments } from '../profiles/slots';
+
+registerThumbnail(projectThumbnail);
 
 const OUTSIDE = new THREE.Color(0x4d9ed9);
 const WHITE = new THREE.Color(0xffffff);
@@ -247,7 +255,7 @@ export default function Plater3D() {
             viewExtras.add(obj);
           };
           if (opt.overhang) {
-            const deg = Number({ ...effectiveConfig(s, 'process'), ...o.settings }.support_threshold_angle) || 30;
+            const deg = Number(objectValues(s, o.id).values.support_threshold_angle) || 30;
             const normal = new THREE.Matrix3().getNormalMatrix(m);
             put(`oh:${o.geometry.uuid}:${deg}:${normal.elements.map((e) => e.toFixed(4)).join()}`,
               () => overhangGeometry(o.geometry, overhangFacets(o.geometry, normal, deg)!), (g) => new THREE.Mesh(g, overhangTint));
@@ -315,6 +323,8 @@ export default function Plater3D() {
     };
 
     const syncBed = (s: State) => {
+      const machine = selectionValues(s, 'machine');
+      if (machine.state !== 'ready' || !machine.status?.ok) return;
       const m = printerPreset(s);
       const key = bedCacheKey(m);
       if (key === bedKey) return;
@@ -323,7 +333,7 @@ export default function Plater3D() {
       bed = buildBed(m, render);
       scene.add(bed);
       area = parsePoints(m?.config.printable_area);
-      height = Number(m?.config.printable_height ?? 250) || 250;
+      height = Number(m?.config.printable_height);
       fitCamera();
     };
 
@@ -455,18 +465,7 @@ void main() {
       }
     };
     const drawScene = renderer.render.bind(renderer);
-    let captureSize: { width: number; height: number; ratio: number } | null = null;
     renderer.render = (target, camera) => {
-      if (target === scene) {
-        if (camera === views.camera && captureSize) {
-          renderer.setDrawingBufferSize(captureSize.width, captureSize.height, captureSize.ratio);
-          captureSize = null;
-        } else if (camera !== views.camera && !captureSize) {
-          const size = renderer.getSize(new THREE.Vector2());
-          captureSize = { width: size.x, height: size.y, ratio: renderer.getPixelRatio() };
-          renderer.setDrawingBufferSize(320, Math.max(1, Math.round(320 * size.y / size.x)), 1);
-        }
-      }
       const reduced: [THREE.Mesh, THREE.BufferGeometry][] = [];
       if (target === scene) {
         lights(camera);
@@ -738,6 +737,30 @@ void main() {
     const tcHelper = tc.getHelper();
     scene.add(tcHelper);
     tc.addEventListener('change', render);
+    let gesture: { objects: PlateObject[]; stop(): void } | null = null;
+    const beginGesture = (stop: () => void) => { gesture = { objects: getState().objects, stop }; };
+    const cancelDrag = () => {
+      if (!gesture || tools.get().value !== 'dragging') return false;
+      const g = gesture;
+      gesture = null;
+      setState({ objects: g.objects });
+      tools.send({ type: 'CANCEL' });
+      g.stop();
+      syncGizmo(getState());
+      render();
+      return true;
+    };
+    const cancelGesture = (ev: KeyboardEvent) => {
+      if (ev.key !== 'Escape' || !cancelDrag()) return;
+      ev.preventDefault();
+      ev.stopImmediatePropagation();
+    };
+    window.addEventListener('keydown', cancelGesture, { capture: true });
+    const leavePrepare = onLeavePage('prepare', () => {
+      cancelDrag();
+      const s = getState();
+      if (s.gizmo !== 'none' || s.cut || s.slant || s.contextMenu) setState({ gizmo: 'none', cut: null, slant: null, contextMenu: null });
+    });
     let rotateStart: { rot: THREE.Quaternion; center: THREE.Vector3; volume?: THREE.Matrix4 } | null = null;
     let endRotate: (() => void) | null = null;
     rotateGizmo = new RotateGizmo(renderer.domElement, () => views.camera, render, {
@@ -747,6 +770,7 @@ void main() {
         if (!o || !i) return;
         tools.send({ type: 'DRAG' });
         controls.enabled = false;
+        beginGesture(() => rotateGizmo!.cancel());
         endRotate = beginStep('Rotate');
         const world = v ? volumeWorld(o, i, v) : null;
         const DEG = Math.PI / 180;
@@ -768,7 +792,7 @@ void main() {
         updateInstance(o.id, i.id, { rotZ: e.z * deg });
       },
       end: () => {
-        endRotate?.(); endRotate = null; rotateStart = null;
+        endRotate?.(); endRotate = null; rotateStart = null; gesture = null;
         tools.send({ type: 'RELEASE' });
         controls.enabled = true;
         syncGizmo(getState());
@@ -805,6 +829,7 @@ void main() {
     tc.addEventListener('dragging-changed', (e) => {
       endStep?.();
       const dragging = (e as unknown as { value: boolean }).value;
+      if (!dragging) { proxy.scale.set(1, 1, 1); proxy.updateMatrix(); gesture = null; }
       tools.send({ type: dragging ? 'DRAG' : 'RELEASE' });
       controls.enabled = !dragging;
       const s = getState();
@@ -823,6 +848,7 @@ void main() {
       const i = o?.instances.find((ii) => ii.id === s.selected?.instance);
       const v = o?.volumes?.find((vv) => vv.id === s.selected?.volume);
       if (dragging && o && i) {
+        beginGesture(() => tc.pointerUp({ button: 0 } as PointerEvent));
         dragStart = { x: i.x, y: i.y, rotX: o.rotX, rotY: o.rotY, rotZ: i.rotZ, scale: [...o.scale],
           volume: v && { world: volumeWorld(o, i, v), proxy: proxy.matrix.clone() } };
         proxyRotation(o.rotX, o.rotY, i.rotZ);
@@ -1063,6 +1089,7 @@ void main() {
       if (ev.pointerType !== 'touch') return;
       touches.add(ev.pointerId);
       if (touches.size > 1) {
+        if (drag?.moved) cancelDrag();
         drag = null;
         downAt = null;
         controls.enabled = true;
@@ -1146,7 +1173,19 @@ void main() {
       setRay(ev);
       const p = bedPoint();
       if (!p) return;
-      if (!drag.moved) endStep = beginStep('Move');
+      if (!drag.moved) {
+        tools.send({ type: 'DRAG' });
+        beginGesture(() => {
+          moving = false;
+          endStep?.();
+          endStep = null;
+          drag = null;
+          downAt = null;
+          controls.enabled = true;
+          tools.send({ type: 'RELEASE' });
+        });
+        endStep = beginStep('Move');
+      }
       drag.moved = true;
       const ddx = p.x + drag.dx - drag.x, ddy = p.y + drag.dy - drag.y;
       const positions = new Map(drag.group.map((g) => [g.instance, { x: g.x + ddx, y: g.y + ddy }]));
@@ -1185,6 +1224,8 @@ void main() {
         render();
         endStep?.();
         endStep = null;
+        gesture = null;
+        tools.send({ type: 'RELEASE' });
         const s = getState(), o = s.objects.find((ob) => ob.id === drag!.object), i = o?.instances.find((ii) => ii.id === drag!.instance);
         const k = i && canAddPlate(s) ? grid.plateAt(s, new THREE.Vector3(i.x, i.y, 0)) : null;
         if (o && k !== null && k !== s.plateIndex) moveToPlate([...new Set(drag.group.map((g) => g.object))], k, plateOffset(s, area, k));
@@ -1233,12 +1274,22 @@ void main() {
       const t = paintTool();
       const world = hit.object.matrixWorld;
       const allow = (stroke!.kind === 'support' && t.overhangsOnly && overhangFacets(target.geometry, new THREE.Matrix3().getNormalMatrix(world), t.highlight)) || undefined;
-      stroke!.paint = t.tool === 'fill' && stroke!.kind === 'color' ? bucketFill(target.geometry, stroke!.paint, hit.tri, t.edges ? t.angle : -1, stroke!.state)
-        : t.tool === 'fill' ? fillPaint(target.geometry, stroke!.paint, hit.tri, t.angle, stroke!.state, allow)
-        : t.tool === 'gap' ? stroke!.paint
-        : t.tool === 'triangle' ? paintTriangle(stroke!.paint, hit.tri, stroke!.state)
-        : t.tool === 'height' ? heightRange(target.geometry, stroke!.paint, hit.tri, world, hit.local.clone().applyMatrix4(world).z, t.height, stroke!.state)
-        : brush(target.geometry, stroke!.paint, hit.tri, hit.local, t.radius / world.getMaxScaleOnAxis(), t.tool, view, stroke!.state, allow);
+      if (t.tool === 'layer') {
+        const object = s.objects.find((ob) => ob.id === stroke!.object), inst = object?.instances.find((i) => i.id === stroke!.instance);
+        if (stroke!.kind !== 'fuzzy' || !object || !inst || !canUseLayerBrush(s, object)) return;
+        const p = layerParams(s, object), profile = layerProfileOf(s, object, p), bed = instanceBox(object, inst).min.z;
+        const hitZ = hit.local.clone().applyMatrix4(world).z;
+        const band = layerBrushBand(p, profile, object.layerProfile ? undefined : object.ranges ?? [], hitZ - bed, t.layers);
+        if (!band) return;
+        stroke!.paint = layerRange(target.geometry, stroke!.paint, world, bed + band.z0, bed + band.z1, stroke!.state);
+      } else {
+        stroke!.paint = t.tool === 'fill' && stroke!.kind === 'color' ? bucketFill(target.geometry, stroke!.paint, hit.tri, t.edges ? t.angle : -1, stroke!.state)
+          : t.tool === 'fill' ? fillPaint(target.geometry, stroke!.paint, hit.tri, t.angle, stroke!.state, allow)
+          : t.tool === 'gap' ? stroke!.paint
+          : t.tool === 'triangle' ? paintTriangle(stroke!.paint, hit.tri, stroke!.state)
+          : t.tool === 'height' ? heightRange(target.geometry, stroke!.paint, hit.tri, world, hit.local.clone().applyMatrix4(world).z, t.height, stroke!.state)
+          : brush(target.geometry, stroke!.paint, hit.tri, hit.local, t.radius / world.getMaxScaleOnAxis(), t.tool, view, stroke!.state, allow);
+      }
       paintView.sync(s, { volume: stroke!.volume, paint: stroke!.paint });
       render();
     };
@@ -1389,6 +1440,7 @@ void main() {
       const t = paintTool(), up = ev.deltaY < 0;
       if (t.tool === 'fill') setPaintTool({ angle: t.angle + (up ? 5 : -5) });
       else if (t.tool === 'height') setPaintTool({ height: t.height + (up ? HEIGHT.step : -HEIGHT.step) });
+      else if (t.tool === 'layer') setPaintTool({ layers: t.layers + (up ? LAYERS.step : -LAYERS.step) });
       else setPaintTool({ radius: t.radius + (up ? RADIUS.step : -RADIUS.step) });
     };
     renderer.domElement.addEventListener('pointerdown', onPaintDown, { capture: true });
@@ -1459,6 +1511,7 @@ void main() {
     };
 
     let rightAt: { x: number; y: number; moved: boolean } | null = null, rightTime = -Infinity;
+    let rightMenuAt: { x: number; y: number; time: number } | null = null;
     const openMenu = (ev: MouseEvent) => {
       const hit = pick(ev);
       if (!hit) {
@@ -1480,7 +1533,15 @@ void main() {
       rightAt = null;
       rightTime = performance.now();
       if (press.moved || Math.hypot(ev.clientX - press.x, ev.clientY - press.y) > 4 || ev.target !== renderer.domElement) return;
+      rightMenuAt = { x: ev.clientX, y: ev.clientY, time: rightTime };
       openMenu(ev);
+    };
+    const onRootContextMenu = (ev: MouseEvent) => {
+      if (ev.target !== document.documentElement || ev.button !== 2 || !rightMenuAt ||
+        performance.now() - rightMenuAt.time >= 400 ||
+        Math.abs(ev.clientX - rightMenuAt.x) > 1 || Math.abs(ev.clientY - rightMenuAt.y) > 1) return;
+      rightMenuAt = null;
+      ev.preventDefault();
     };
     const onContextMenu = (ev: MouseEvent) => {
       ev.preventDefault();
@@ -1491,6 +1552,7 @@ void main() {
     };
     window.addEventListener('pointermove', onRightMove);
     window.addEventListener('pointerup', onRightUp);
+    window.addEventListener('contextmenu', onRootContextMenu, { capture: true });
     renderer.domElement.dataset.customContext = 'orca';
     renderer.domElement.addEventListener('contextmenu', onContextMenu);
     controls.addEventListener('start', () => {
@@ -1612,7 +1674,7 @@ void main() {
       }
     };
 
-    let last: State | null = null;
+    let last: State | null = null, lastColours = '';
     let lastTower: [unknown, unknown, unknown] = [null, null, null];
     const drawnEdits = (s: State) => viewOptions().overhang ? `${effectiveConfig(s, 'process').support_threshold_angle}` : '';
     const sync = () => {
@@ -1636,13 +1698,14 @@ void main() {
         render();
         last = { ...last, cut: s.cut };
       }
-      if (last && s.objects === last.objects && s.selected === last.selected && s.printer === last.printer && s.projectPlates === last.projectPlates &&
+      const colours = slotFilaments(s).map((_, i) => filamentColor(s, i + 1)).join();
+      if (last && colours === lastColours && s.objects === last.objects && s.selected === last.selected && s.printer === last.printer && s.projectPlates === last.projectPlates &&
           s.plateIndex === last.plateIndex && s.project === last.project && s.job.state === last.job.state &&
-          s.filamentSlots === last.filamentSlots && s.slotColours === last.slotColours && s.filamentEdits === last.filamentEdits &&
-          s.userPresets === last.userPresets && s.filaments === last.filaments && s.projectMaterials === last.projectMaterials &&
-          s.machines === last.machines && s.gizmo === last.gizmo && s.dirty.machine === last.dirty.machine &&
+          s.filamentEdits === last.filamentEdits &&
+          s.resolved === last.resolved && s.records === last.records && s.catalogReads === last.catalogReads && s.projectMaterials === last.projectMaterials &&
+          s.gizmo === last.gizmo && s.dirty.machine === last.dirty.machine &&
           (s.dirty.process === last.dirty.process || drawnEdits(s) === drawnEdits(last))) return;
-      last = s;
+      last = s; lastColours = colours;
       syncBed(s);
       syncGrid(s);
       syncObjects(s);
@@ -1686,6 +1749,8 @@ void main() {
 
     return () => {
       clearTimeout(settle);
+      window.removeEventListener('keydown', cancelGesture, { capture: true });
+      leavePrepare();
       disposed = true;
       unmountMarks?.();
       unsub();
@@ -1706,6 +1771,7 @@ void main() {
       window.removeEventListener('pointerup', onTouchUp);
       window.removeEventListener('pointermove', onRightMove);
       window.removeEventListener('pointerup', onRightUp);
+      window.removeEventListener('contextmenu', onRootContextMenu, { capture: true });
       window.removeEventListener('pointercancel', onTouchUp);
       cancelAnimationFrame(hoverFrame);
       ro.disconnect();

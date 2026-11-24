@@ -1,5 +1,6 @@
 // Curved tops port of fich-l / OrcaSlicer-Nonplanar v0.1 (AGPL-3.0).
 #include "CurvedTopsSurface.hpp"
+#include "libslic3r/Nonplanar/Research.hpp"
 #include "Repair.hpp"
 #include "Validate.hpp"
 #include "libslic3r/GCode/ClearanceRepair.hpp"
@@ -231,19 +232,23 @@ NonplanarSurface::check_printable_surfaces(float max_angle)
 }
 
 ExPolygons
-NonplanarSurface::horizontal_projection() const
+NonplanarSurface::horizontal_projection(std::optional<double> planar_ironing_from_z) const
 {
     Polygons pp;
     pp.reserve(this->mesh.size());
     Points key;
     key.reserve(3 * this->mesh.size());
     size_t hash = this->mesh.size();
-    for(auto& facet : this->mesh) {
+    for (const auto &[id, facet] : this->mesh) {
+        // A level face can share a curved patch with a fillet. Keep its shell
+        // and ironing together on their original layer.
+        if (planar_ironing_from_z && facet.stats.min.z >= *planar_ironing_from_z &&
+            std::abs(facet.normal.x) < EPSILON && std::abs(facet.normal.y) < EPSILON)
+            continue;
         Polygon p;
         p.points.resize(3);
-        p.points[0] = Point(scale_(facet.second.vertex[0].x), scale_(facet.second.vertex[0].y));
-        p.points[1] = Point(scale_(facet.second.vertex[1].x), scale_(facet.second.vertex[1].y));
-        p.points[2] = Point(scale_(facet.second.vertex[2].x), scale_(facet.second.vertex[2].y));
+        for (size_t i = 0; i < 3; ++i)
+            p.points[i] = Point(scale_(facet.vertex[i].x), scale_(facet.vertex[i].y));
         p.make_counter_clockwise();
         for (const Point &pt : p.points) {
             key.push_back(pt);
@@ -321,18 +326,9 @@ double curved_cone_tolerance(NonplanarMode mode)
     if (!curved_cone_allowance(mode))
         return 0.05;
     double tolerance = 0.13;
-    if (const char *value = std::getenv("NP_CONTACT_CONE_TOL"); value != nullptr)
+    if (const char *value = research_switch("NP_CONTACT_CONE_TOL"); value != nullptr)
         tolerance = std::atof(value);
     return std::clamp(tolerance, 0., 0.13);
-}
-
-double curved_tops_cone_tolerance(const Print &print)
-{
-    double tolerance = std::numeric_limits<double>::infinity();
-    for (const PrintObject *object : print.objects())
-        if (curved_cone_allowance(object->config().nonplanar_mode.value))
-            tolerance = std::min(tolerance, curved_cone_tolerance(object->config().nonplanar_mode.value));
-    return std::isfinite(tolerance) ? tolerance : 0.05;
 }
 
 namespace {

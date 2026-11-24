@@ -20,7 +20,7 @@ export function OpenProjects({ discovery, query, current }: { discovery: OpenPro
         throw new Error(context.error || 'This project could not be opened. It may have been deleted.');
       setState({ tab: 'prepare', sessionDialog: null });
     } catch (error) {
-      toast(`Could not join project: ${error instanceof Error ? error.message : String(error)}`);
+      toast('couldnt_join_project', { detail: error instanceof Error ? error.message : String(error) });
     } finally {
       opening.current = false;
       setJoining(null);

@@ -4,6 +4,7 @@ import { getState, newId, printerPreset, setState, toast, updateVolume, type Pla
 import { undoable } from '../state/history';
 import { centred, instanceBox, instanceMatrix, loadMesh, request, volumeBox, volumeWorld } from './geometry';
 import objectKeys from '../object_options.json';
+import { pickFiles } from '../file-picker';
 
 const replace = (name: string, objects: PlateObject[], selected?: { object: number; instance: number }) =>
   undoable(name, () => setState({ objects, ...(selected ? { selected } : {}) }));
@@ -61,8 +62,8 @@ export async function partsToObjects(id: number) {
     const g = v.geometry.clone().applyMatrix4(volumeWorld(o, inst, v));
     const at = new THREE.Box3().setFromBufferAttribute(g.attributes.position as THREE.BufferAttribute);
     const file = new File([stl(g)], `${v.name}.stl`, { type: 'model/stl' });
-    objects.push({ ...o, id: newId(), name: v.name, geometry: await loadMesh(file), source: file, rotX: 0, rotY: 0, scale: [1, 1, 1], volumes: undefined,
-      extruder: v.extruder || o.extruder, settings: { ...o.settings, ...v.settings }, paint: undefined, layerProfile: undefined, units: undefined,
+    objects.push({ ...o, id: newId(), name: v.name, geometry: await loadMesh(file, undefined, !v.paint), source: file, rotX: 0, rotY: 0, scale: [1, 1, 1], volumes: undefined,
+      extruder: v.extruder || o.extruder, settings: { ...o.settings, ...v.settings }, paint: v.paint, layerProfile: undefined, units: undefined,
       instances: [{ id: newId(), x: (at.min.x + at.max.x) / 2, y: (at.min.y + at.max.y) / 2, rotZ: 0, z: 0 }] });
   }
   const rest: PlateObject = { ...o, volumes: o.volumes!.filter((v) => v.type !== 'part') };
@@ -83,21 +84,16 @@ function stl(g: THREE.BufferGeometry): Blob {
 }
 
 export function replaceFile(id: number) {
-  const input = document.createElement('input');
-  input.type = 'file';
-  input.accept = '.stl,.obj';
-  input.onchange = async () => {
-    const file = input.files?.[0];
-    if (!file) return;
+  pickFiles('.stl,.STL,.obj,.OBJ', async (files) => {
+    const file = files[0];
     try {
       const geometry = await loadMesh(file);
       const s = getState();
       replace('Replace with 3D file', s.objects.map((x) => (x.id === id ? { ...x, geometry, source: file, paint: undefined, layerProfile: undefined } : x)));
     } catch (e) {
-      toast(e instanceof Error ? e.message : String(e));
+      toast('objectops_failed', { detail: e instanceof Error ? e.message : String(e) });
     }
-  };
-  input.click();
+  });
 }
 
 export function mirrorVolume(objectId: number, volumeId: number, axis: 0 | 1 | 2) {
@@ -126,7 +122,7 @@ export async function exportVolumeStl(objectId: number, volumeId: number) {
     a.remove();
     setTimeout(() => URL.revokeObjectURL(a.href), 60000);
   } catch (e) {
-    toast(`Oops! Export failed: ${e instanceof Error ? e.message : e}`);
+    toast('export_failed', { detail: e instanceof Error ? e.message : e });
   }
 }
 

@@ -3,17 +3,18 @@ import react from '@vitejs/plugin-react';
 import { demoBuild } from './demo-build.ts';
 import { bundleReport } from './bundle-report.ts';
 import { optionAssets } from './option-assets.ts';
-import { mockAssets } from './mock-assets.ts';
 import { orcaAssets } from './orca-assets.ts';
 import { licenceNotices } from './licence-notices.ts';
 import { bambuChecks } from './bambu-checks.ts';
 import { devCompression } from './dev-compression.ts';
+import { buildCompression } from './build-compression.ts';
 import { buildStartup, devStartup, startupGroups } from './dev-startup.ts';
 import { devBuildSwitch } from './dev-build-switch.ts';
+import { devServiceWorkerReset } from './dev-sw-reset.ts';
 import { fileURLToPath } from 'node:url';
 
 export default defineConfig(({ mode }) => ({
-  plugins: [...(mode === 'demo' ? [demoBuild()] : []), devCompression(), devBuildSwitch(), devStartup(), buildStartup(), react(), orcaAssets(), optionAssets(), bambuChecks(), mockAssets(), bundleReport(), licenceNotices()],
+  plugins: [...(mode === 'demo' ? [demoBuild()] : []), devServiceWorkerReset(), devCompression(), devBuildSwitch(), devStartup(), buildStartup(), react(), orcaAssets(), optionAssets(), bambuChecks(), bundleReport(), licenceNotices(), ...(mode === 'demo' ? [] : [buildCompression()])],
   worker: { format: 'es', plugins: () => [...(mode === 'demo' ? [demoBuild()] : []), optionAssets(false), licenceNotices(false)] },
   server: {
     port: 20120,
@@ -22,7 +23,13 @@ export default defineConfig(({ mode }) => ({
     allowedHosts: [],
     fs: { allow: [fileURLToPath(new URL('.', import.meta.url)), fileURLToPath(new URL('../server/method_capabilities.json', import.meta.url))] },
     proxy: {
-      '/api': { target: process.env.ORCA_API ?? 'http://127.0.0.1:20198', changeOrigin: true },
+      '/api': {
+        target: process.env.ORCA_API ?? 'http://127.0.0.1:20198', changeOrigin: true,
+        configure: (proxy, options) => proxy.on('proxyReq', (proxyReq, req) => {
+          const origin = req.headers.origin;
+          if (origin && URL.canParse(origin) && new URL(origin).host === req.headers.host) proxyReq.setHeader('origin', new URL(String(options.target)).origin);
+        }),
+      },
     },
   },
   build: {

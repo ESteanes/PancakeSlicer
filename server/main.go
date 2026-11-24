@@ -13,7 +13,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"sync"
 	"syscall"
 	"time"
 )
@@ -28,6 +27,9 @@ type Config struct {
 	Listen                string
 	Tool                  string
 	Resources             string
+	SupportFinsNode       string
+	SupportFinsCLI        string
+	SupportFinsElectron   bool
 	JobRoot               string
 	StaticDir             string
 	MaxJobs               int
@@ -48,9 +50,8 @@ type Config struct {
 	ReleaseFeed           string
 	ReleaseToken          string
 	PrinterStore          *printerStore
-	Features              ToolFeatures
 	Options               *cachedResponse
-	BundleDigest          func() bundleDigest
+	Engine                EngineBuild
 }
 
 func env(key, def string) string {
@@ -82,13 +83,16 @@ func envBool(key string) bool {
 func parseConfig() Config {
 	var c Config
 	flag.StringVar(&c.SurfaceManifest, "surface-manifest", env("ORCA_WEB_SURFACE_MANIFEST", env("ORCA_WEB_ARTIFACT_MANIFEST", "")), "native identity manifest")
-	flag.StringVar(&c.ArtifactQualification, "artifact-qualification", env("ORCA_WEB_ARTIFACT_QUALIFICATION", ""), "release check result for the bundled engine")
+	flag.StringVar(&c.ArtifactQualification, "artifact-qualification", env("ORCA_WEB_ARTIFACT_QUALIFICATION", ""), "exact native reference qualification ready record")
 	flag.StringVar(&c.SourceArchive, "source-archive", env("ORCA_WEB_SOURCE_ARCHIVE", ""), "mounted Corresponding Source archive matching build metadata (ORCA_WEB_SOURCE_ARCHIVE)")
 	flag.StringVar(&c.SourceURL, "source-url", env("ORCA_WEB_SOURCE_URL", ""), "Corresponding Source repository URL or exact URL containing {revision} (ORCA_WEB_SOURCE_URL)")
 	flag.StringVar(&c.DataDir, "data-dir", env("ORCA_WEB_DATA_DIR", "data"), "persistent user preset directory (ORCA_WEB_DATA_DIR)")
 	flag.StringVar(&c.Listen, "listen", env("ORCA_WEB_LISTEN", "127.0.0.1:8780"), "listen address (ORCA_WEB_LISTEN)")
 	flag.StringVar(&c.Tool, "tool", env("ORCA_WEB_TOOL", "build-nogui/tests/fff_print/nonplanar_slice_tool"), "nonplanar_slice_tool path (ORCA_WEB_TOOL)")
 	flag.StringVar(&c.Resources, "resources", env("ORCA_WEB_RESOURCES", "resources"), "resources directory holding profiles/ and nonplanar/ (ORCA_WEB_RESOURCES)")
+	flag.StringVar(&c.SupportFinsNode, "support-fins-node", env("ORCA_WEB_SUPPORT_FINS_NODE", ""), "Node 20.10+ or Electron executable for Support Fins (ORCA_WEB_SUPPORT_FINS_NODE)")
+	flag.StringVar(&c.SupportFinsCLI, "support-fins-cli", env("ORCA_WEB_SUPPORT_FINS_CLI", ""), "bundled Support Fins CLI path (ORCA_WEB_SUPPORT_FINS_CLI)")
+	flag.BoolVar(&c.SupportFinsElectron, "support-fins-electron", envBool("ORCA_WEB_SUPPORT_FINS_ELECTRON"), "use Electron's Node-compatible runtime without a process address-space cap")
 	flag.StringVar(&c.JobRoot, "job-root", env("ORCA_WEB_JOB_ROOT", filepath.Join(os.TempDir(), "orca-webapp-jobs")), "scratch directory for job files (ORCA_WEB_JOB_ROOT)")
 	flag.StringVar(&c.StaticDir, "static", env("ORCA_WEB_STATIC", "web/dist"), "static front end to serve at / when it exists (ORCA_WEB_STATIC)")
 	flag.IntVar(&c.MaxJobs, "max-jobs", envInt("ORCA_WEB_MAX_JOBS", 2), "slices running at once; more jobs queue (ORCA_WEB_MAX_JOBS)")
@@ -107,7 +111,7 @@ func parseConfig() Config {
 	flag.BoolVar(&c.RequestLog, "request-log", envBool("ORCA_WEB_REQUEST_LOG"), "JSON request logging (ORCA_WEB_REQUEST_LOG)")
 	flag.BoolVar(&c.Metrics, "metrics", envBool("ORCA_WEB_METRICS"), "expose GET /metrics (ORCA_WEB_METRICS)")
 	flag.StringVar(&c.PrinterNetwork, "printer-network", env("ORCA_WEB_PRINTER_NETWORK", "lan"), "where printers may live, for printer connections and Send: lan (private IPv4/IPv6 ranges), CIDRs and host names, or off (ORCA_WEB_PRINTER_NETWORK)")
-	flag.StringVar(&c.ReleaseFeed, "release-feed", env("ORCA_WEB_RELEASE_FEED", "ZimengXiong/PancakeSlicer"), "GitHub owner/repo whose latest release the update notice offers; empty offers none (ORCA_WEB_RELEASE_FEED)")
+	flag.StringVar(&c.ReleaseFeed, "release-feed", env("ORCA_WEB_RELEASE_FEED", ""), "GitHub owner/repo whose latest release the update notice offers; empty offers none (ORCA_WEB_RELEASE_FEED)")
 	flag.StringVar(&c.ReleaseToken, "release-token", env("ORCA_WEB_RELEASE_TOKEN", ""), "token for a private -release-feed, sent only to GitHub's API (ORCA_WEB_RELEASE_TOKEN)")
 	proxies := flag.String("trusted-proxies", env("ORCA_WEB_TRUSTED_PROXIES", ""), "comma-separated trusted proxy CIDRs (ORCA_WEB_TRUSTED_PROXIES)")
 	flag.Parse()
@@ -142,6 +146,13 @@ func parseConfig() Config {
 			*p = abs
 		}
 	}
+	for _, p := range []*string{&c.SupportFinsNode, &c.SupportFinsCLI} {
+		if *p != "" {
+			if abs, err := filepath.Abs(*p); err == nil {
+				*p = abs
+			}
+		}
+	}
 	return c
 }
 
@@ -156,9 +167,6 @@ func main() {
 		} else {
 			file.Close()
 		}
-	}
-	if st, err := os.Stat(cfg.Tool); err != nil || st.IsDir() {
-		log.Printf("warning: tool %s not found; jobs will fail until it is built", cfg.Tool)
 	}
 	if st, err := os.Stat(filepath.Join(cfg.Resources, "profiles")); err != nil || !st.IsDir() {
 		log.Fatalf("no profiles directory under %s", cfg.Resources)
@@ -176,58 +184,31 @@ func main() {
 			log.Printf("WARNING: printer connections are on without a bearer token; anyone who can reach this service can add printers and start prints")
 		}
 	}
-	cfg.BundleDigest = newBundleDigest(cfg.Tool, cfg.Resources)
-	if cfg.SurfaceManifest != "" {
-		go cfg.BundleDigest()
+	if err := checkEngineBuild(&cfg); err != nil {
+		log.Fatal(err)
 	}
-	presets := NewPresetIndex(filepath.Join(cfg.Resources, "profiles"))
-	var placementErr, plateIndexErr, presetErr error
-	var colour map[string]bool
-	var features ToolFeatures
-	var options *cachedResponse
-	probe := cfg
-	var wg sync.WaitGroup
-	for _, run := range []func(){
-		func() {
-			options = probeTool(probe, &features)
-			if features.DumpPresets {
-				tool := probe
-				tool.Options = options
-				presets.tool = &tool
-			}
-			presetErr = warmPresets(presets)
-		},
-		func() { placementErr = probePlatePlacement(probe) },
-		func() { plateIndexErr = probePlateIndex(probe) },
-		func() { colour = probeColourChange(probe) },
-		func() { probeUsage(probe, &features) },
-	} {
-		wg.Add(1)
-		go func() { defer wg.Done(); run() }()
+	if cfg.Options, err = loadOptions(cfg); err != nil {
+		log.Fatal(err)
 	}
-	wg.Wait()
-	if presetErr != nil {
-		log.Fatal(presetErr)
+	if err := checkMethodModes(cfg.Options); err != nil {
+		log.Fatal(err)
 	}
-	cfg.Features, cfg.Options = features, options
-	if placementErr != nil {
-		log.Printf("R238 placement unavailable; plate z/printable and loaded project saves require an upgraded tool: %v", placementErr)
-	} else {
-		cfg.Features.PlatePlacement = true
+	if err := configureResolve(cfg.Options.plain); err != nil {
+		log.Fatal(err)
 	}
-	if plateIndexErr != nil {
-		log.Printf("selected project plates unavailable: %v", plateIndexErr)
-	} else {
-		cfg.Features.PlateIndex = true
+	catalog, err := loadCatalog(filepath.Join(cfg.Resources, "catalog"))
+	if err != nil {
+		log.Fatal(err)
 	}
-	cfg.Features.ColourChange = colour
-	log.Printf("tool operations: step %v, edit %v, force_planar %v, cut %v, volumes %v, patch_preview %v, surface_grid %v, calib %v", cfg.Features.Step, cfg.Features.Edit, cfg.Features.ForcePlanar, cfg.Features.Cut, cfg.Features.Volumes, cfg.Features.PatchPreview, cfg.Features.SurfaceGrid, cfg.Features.Calib)
+	if err := checkStarters(catalog); err != nil {
+		log.Fatal(err)
+	}
+	log.Printf("catalog %s: %d printers, %d prints, %d filaments", catalog.Version, len(catalog.Printers), len(catalog.Prints), len(catalog.Filaments))
 	jobs, err := NewJobManager(cfg)
 	if err != nil {
 		log.Fatal(err)
 	}
-	go printerCatalogResponse(presets.root)
-	srv := &http.Server{Addr: cfg.Listen, Handler: NewServer(cfg, jobs, presets), ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 10 * time.Second, MaxHeaderBytes: 2 << 20}
+	srv := &http.Server{Addr: cfg.Listen, Handler: NewServer(cfg, jobs, catalog), ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 10 * time.Second, MaxHeaderBytes: 2 << 20}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -235,6 +216,7 @@ func main() {
 	go func() {
 		defer close(shutdownDone)
 		<-ctx.Done()
+		closeLiveStreams()
 		jobs.Shutdown()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
@@ -249,22 +231,4 @@ func main() {
 		log.Fatal(err)
 	}
 	<-shutdownDone
-}
-
-func warmPresets(presets *PresetIndex) error {
-	if _, err := presets.names(); err != nil {
-		return err
-	}
-	go func() {
-		for _, name := range []string{"BBL", "Prusa", "Custom"} {
-			vendor, err := presets.vendor(name)
-			if err == nil {
-				_, err = filamentCatalogResponse(vendor)
-			}
-			if err != nil {
-				log.Printf("cannot preload %s presets: %v", name, err)
-			}
-		}
-	}()
-	return nil
 }

@@ -1,5 +1,6 @@
 #include <atomic>
-#include <fstream>
+#include "libslic3r/Nonplanar/Research.hpp"
+#include <filesystem>
 #include "ArcFitter.hpp"
 #include "BoundingBox.hpp"
 #include "Circle.hpp"
@@ -180,6 +181,7 @@ using namespace std::literals::string_view_literals;
 #include "Model.hpp"
 #include "MultiNozzleUtils.hpp"
 #include "Slicing.hpp"
+#include "ZRivets.hpp"
 
 namespace fs = boost::filesystem;
 
@@ -2337,7 +2339,7 @@ std::vector<GCode::LayerToPrint> GCode::collect_layers_to_print(const PrintObjec
             + _(L("The model might be paper-thin at these heights or have a broken mesh."));
 
         const_cast<Print*>(object.print())->active_step_add_warning(
-            PrintStateBase::WarningLevel::CRITICAL, warning, PrintStateBase::SlicingEmptyGcodeLayers);
+            PrintStateBase::WarningLevel::CRITICAL, WarningCode{ "empty_layers", warning_object(object.model_object()->name) }, warning, PrintStateBase::SlicingEmptyGcodeLayers);
     }
 
     if (object.print()->config().belt_printer.value)
@@ -2727,11 +2729,11 @@ void GCode::do_export(Print* print, const char* path, GCodeProcessorResult* resu
 
     boost::nowide::remove(path);
 
-    fs::path file_path(path);
-    fs::path folder = file_path.parent_path();
-    if (!fs::exists(folder)) {
-        fs::create_directory(folder);
-        BOOST_LOG_TRIVIAL(error) << "[WARNING]: the parent path " + folder.string() +" is not there, create it!" << std::endl;
+    const auto file_path = std::filesystem::u8path(path);
+    const auto folder = file_path.parent_path();
+    if (!folder.empty() && !std::filesystem::exists(folder)) {
+        std::filesystem::create_directory(folder);
+        BOOST_LOG_TRIVIAL(error) << "[WARNING]: the parent path " + folder.u8string() +" is not there, create it!" << std::endl;
     }
 
     static std::atomic<unsigned> tmp_counter{0};
@@ -2745,8 +2747,8 @@ void GCode::do_export(Print* print, const char* path, GCodeProcessorResult* resu
     if (! file.is_open()) {
         std::string err_msg = std::string("G-code export to ") + path + " failed.\nCannot open the file for writing.\n";
         BOOST_LOG_TRIVIAL(error) << err_msg << std::endl;
-        if (!fs::exists(folder)) {
-            std::string add_err_msg = "the parent path " + folder.string() +" is not there!!!";
+        if (!folder.empty() && !std::filesystem::exists(folder)) {
+            std::string add_err_msg = "the parent path " + folder.u8string() +" is not there!!!";
             BOOST_LOG_TRIVIAL(error) << add_err_msg << std::endl;
             err_msg += add_err_msg;
         }
@@ -2869,25 +2871,9 @@ void GCode::do_export(Print* print, const char* path, GCodeProcessorResult* resu
         boost::nowide::remove(path_tmp.c_str());
         throw;
     }
-    if (std::any_of(print->objects().begin(), print->objects().end(), [](const PrintObject *object) {
-            return curved_tops_mode(object->config().nonplanar_mode.value);
-        })) {
-        std::fstream header(path_tmp, std::ios::in | std::ios::out | std::ios::binary);
-        std::string prefix(8192, '\0');
-        header.read(prefix.data(), std::streamsize(prefix.size()));
-        prefix.resize(size_t(header.gcount()));
-        auto counter = [&](const std::string &key, size_t value) {
-            const size_t at = prefix.find(key);
-            if (at == std::string::npos) throw Slic3r::RuntimeError("Missing curved tops clearance header.");
-            char digits[32];
-            std::snprintf(digits, sizeof(digits), "%-20zu", value);
-            header.clear();
-            header.seekp(std::streamoff(at + key.size()));
-            header.write(digits, 20);
-        };
-        counter("; nonplanar_grazes = ", m_processor.result().clearance_report.cone_graze_moves);
-        counter("; nonplanar_hits = ", m_processor.result().clearance_report.hit_moves);
-    }
+    const bool curved_tops = std::any_of(print->objects().begin(), print->objects().end(), [](const PrintObject *object) {
+        return curved_tops_mode(object->config().nonplanar_mode.value);
+    });
     if (Nonplanar::wave_enabled(*print)) {
         const auto &processed = m_processor.result();
         bool printing = false;
@@ -2937,8 +2923,10 @@ void GCode::do_export(Print* print, const char* path, GCodeProcessorResult* resu
             ++found->displaced_points;
             found->displaced_length += (b - a).cast<double>().norm();
         }
-        Nonplanar::write_wave_verification(path_tmp, processed.clearance_report.cone_graze_moves,
-                                           processed.clearance_report.hit_moves, wave_results);
+    }
+    if (curved_tops || !wave_results.empty()) {
+        const auto &clearance = m_processor.result().clearance_report;
+        Nonplanar::write_wave_verification(path_tmp, clearance.cone_graze_moves, clearance.hit_moves, wave_results);
     }
     if (!retain_raw_positions && print->config().nonplanar_kinematics.value == RotaryLayout::None)
         m_processor.result().joints.clear();
@@ -2955,10 +2943,7 @@ void GCode::do_export(Print* print, const char* path, GCodeProcessorResult* resu
             m_processor.result().gcode_check_result.error_code |= (1 << 11);
         }
     }
-    const bool curved_retry = m_processor.result().clearance_report.hit_moves > 0 &&
-        std::any_of(print->objects().begin(), print->objects().end(), [](const PrintObject *object) {
-            return curved_tops_mode(object->config().nonplanar_mode.value);
-        });
+    const bool curved_retry = curved_tops && m_processor.result().clearance_report.hit_moves > 0;
     if (result != nullptr) {
         *result = std::move(m_processor.extract_result());
         result->filename = path;
@@ -3320,7 +3305,6 @@ void GCode::_do_export(Print& print, GCodeOutputStream &file, ThumbnailsGenerato
             }
             m_nonplanar_deferral.emplace(object, planned != nullptr ? *planned : plan_nonplanar_deferral_reusing(*object, m_nonplanar_clearance, paths));
         }
-    this->band_curved_tops(print);
     this->queue_advanced_conformal(print);
     m_last_width = 0.f;
     m_last_layer_accumulated_mass = 0.0;
@@ -3360,7 +3344,7 @@ void GCode::_do_export(Print& print, GCodeOutputStream &file, ThumbnailsGenerato
                                           Nonplanar::bottom_shells_enabled(config, object->config());
         }
     for (const PrintObject *object : print.objects())
-        m_track_nonplanar_material |= !object->conformal().patches.empty();
+        m_track_nonplanar_material |= curved_tops_mode(object->config().nonplanar_mode.value) || !object->conformal().patches.empty();
     if (print.config().nonplanar_kinematics.value != RotaryLayout::None) {
         m_writer.set_tool_kinematics(make_tool_kinematics(print.config()));
         m_writer.set_min_joint_move_time(Nonplanar::full_orientation(print.config()) ? 0. :
@@ -3923,7 +3907,7 @@ void GCode::_do_export(Print& print, GCodeOutputStream &file, ThumbnailsGenerato
         const bool imex_mode_resolved = resolve_mode(imex_active_mode);
         if (imex_active_mode != kImexPrimaryMode && (!imex_mode_resolved || imex_active_mode_tools.empty())) {
             print.active_step_add_warning(
-                PrintStateBase::WarningLevel::NON_CRITICAL,
+                PrintStateBase::WarningLevel::NON_CRITICAL, WarningCode{ "imex_mode_fallback" },
                 imex_mode_resolved
                     ? Slic3r::format(_(L("The IDEX/IQEX mode \"%1%\" has no tools assigned on the selected printer. "
                                          "Printing in Primary mode instead. Assign the mode's tools in Printer "
@@ -3961,22 +3945,35 @@ void GCode::_do_export(Print& print, GCodeOutputStream &file, ThumbnailsGenerato
 
     std::string thumbnails_value = print.config().option<ConfigOptionString>("thumbnails")->value;
     bool has_BTT_thumbnail = (thumbnails_value.find("BTT_TFT") != std::string::npos);
-
-    if(!has_BTT_thumbnail){
-        file.write_format("; HEADER_BLOCK_START\n");
-        file.write_format("; generated by %s %s on %s\n", Slic3r::header_slic3r_generated().c_str(), Slic3r::nonplanar_build_label().c_str(),
-                          Slic3r::Utils::local_timestamp().c_str());
-        if (Nonplanar::wave_enabled(print)) {
-            for (const auto &[object, field] : m_wave_fields)
-                file.write_format("; nonplanar_wave = %s A=%g λ=%g\n", object->config().nonplanar_wave.serialize().c_str(),
-                                  field.amplitude(), object->config().nonplanar_wave_wavelength.value);
-            file.write_format("; nonplanar_grazes = %-20d\n; nonplanar_hits = %-20d\n", 0, 0);
-        }
+    const bool has_curved_tops = std::any_of(print.objects().begin(), print.objects().end(), [](const PrintObject *object) {
+        return curved_tops_mode(object->config().nonplanar_mode.value);
+    });
+    const bool has_wave_results = std::any_of(print.objects().begin(), print.objects().end(), [](const PrintObject *object) {
+        return object->config().nonplanar_wave.value != NonplanarWave::Off;
+    });
+    auto write_clearance_slots = [&] {
+        const size_t pending_grazes = std::hash<std::string>{}(m_processor.result().filename);
+        file.write_format("; nonplanar_grazes = %-20zu\n; nonplanar_hits = %-20d\n", pending_grazes, 0);
         for (size_t i = 0; i < print.objects().size(); ++i)
             if (print.objects()[i]->config().nonplanar_wave.value != NonplanarWave::Off) {
                 const std::string pending = "{\"object\":" + std::to_string(i) + "}";
                 file.write_format("; nonplanar_wave_result = %-768s\n", pending.c_str());
             }
+    };
+
+    if(!has_BTT_thumbnail){
+        file.write_format("; HEADER_BLOCK_START\n");
+        file.write_format("; generated by OrcaSlicer %s on %s\n", SoftFever_VERSION,
+                          Slic3r::Utils::local_timestamp().c_str());
+        file.write_format("; pancakeslicer_build = %s\n", Slic3r::nonplanar_build_label().c_str());
+        file.write_format("; nonplanar_clearance_mode = %s\n", ConfigOptionEnum<NonplanarMode>(print_clearance_mode(print)).serialize().c_str());
+        if (has_curved_tops || has_wave_results)
+            write_clearance_slots();
+        if (Nonplanar::wave_enabled(print)) {
+            for (const auto &[object, field] : m_wave_fields)
+                file.write_format("; nonplanar_wave = %s A=%g λ=%g\n", object->config().nonplanar_wave.serialize().c_str(),
+                                  field.amplitude(), object->config().nonplanar_wave_wavelength.value);
+        }
         for (const PrintObject *object : print.objects())
             if (const Nonplanar::OneShotState *oneshot = object->oneshot_state(); oneshot != nullptr && oneshot->solved) {
                 file.write_format("; oneshot_student = %s, polish_k = %d\n", oneshot->student.c_str(), oneshot->polish_k);
@@ -3988,9 +3985,7 @@ void GCode::_do_export(Print& print, GCodeOutputStream &file, ThumbnailsGenerato
         for (const PrintObject *object : print.objects())
             if (!object->native_summary().empty())
                 file.write_format("; nonplanar_native = %s: %s\n", object->model_object()->name.c_str(), object->native_summary().c_str());
-        if (std::any_of(print.objects().begin(), print.objects().end(), [](const PrintObject *object) {
-                return curved_tops_mode(object->config().nonplanar_mode.value);
-            })) {
+        if (has_curved_tops) {
             size_t kept = 0, candidates = 0;
             double footprint = 0., curved_length = 0., upward_area = 0.;
             for (const PrintObject *object : print.objects()) {
@@ -4009,8 +4004,6 @@ void GCode::_do_export(Print& print, GCodeOutputStream &file, ThumbnailsGenerato
             file.write("; curved_top_area_denominator = sum of XY-projected areas of all upward-facing mesh facets\n");
             if (kept == 0)
                 file.write("; planar_fallback_reason = no selected surface has curved roads after head clearance and geometric limits\n");
-            if (!Nonplanar::wave_enabled(print))
-                file.write_format("; nonplanar_grazes = %-20d\n; nonplanar_hits = %-20d\n", 0, 0);
         }
         if (is_bbl_printers)
             file.write_format(";%s\n", GCodeProcessor::reserved_tag(GCodeProcessor::ETags::Estimated_Printing_Time_Placeholder).c_str());
@@ -4138,6 +4131,12 @@ void GCode::_do_export(Print& print, GCodeOutputStream &file, ThumbnailsGenerato
                 GCodeThumbnails::export_thumbnails_to_file(
                     thumbnail_cb, print.get_plate_index(), thumbnails, [&file](const char* sz) { file.write(sz); }, [&print]() { print.throw_if_canceled(); });
         }
+    }
+
+    if (has_BTT_thumbnail && (has_curved_tops || has_wave_results)) {
+        file.write("; HEADER_BLOCK_START\n");
+        write_clearance_slots();
+        file.write("; HEADER_BLOCK_END\n\n");
     }
 
     this->write_belt_header(file, print);
@@ -4308,7 +4307,7 @@ void GCode::_do_export(Print& print, GCodeOutputStream &file, ThumbnailsGenerato
     std::function<void(void)> throw_if_canceled_func = [&print]() { print.throw_if_canceled(); };
     m_seam_placer.init(print, throw_if_canceled_func);
     if (!m_seam_placer.precise_seam_warning().empty())
-        print.active_step_add_warning(PrintStateBase::WarningLevel::NON_CRITICAL,
+        print.active_step_add_warning(PrintStateBase::WarningLevel::NON_CRITICAL, WarningCode{ "precise_seam" },
                                       m_seam_placer.precise_seam_warning(),
                                       PrintStateBase::SlicingPreciseSeamWarning);
 
@@ -4520,7 +4519,7 @@ void GCode::_do_export(Print& print, GCodeOutputStream &file, ThumbnailsGenerato
                     }
                     else {
                         if (overlap) {
-                           print.active_step_add_warning(PrintStateBase::WarningLevel::CRITICAL,
+                           print.active_step_add_warning(PrintStateBase::WarningLevel::CRITICAL, WarningCode{ "priming_region_close" },
                                _(L("Your print is very close to the priming regions. "
                                  "Make sure there is no collision.")));
                         } else {
@@ -7524,8 +7523,15 @@ void GCode::append_full_config(const Print &print, std::string &str)
     const bool curved_tops = std::any_of(print.objects().begin(), print.objects().end(), [](const PrintObject *object) {
         return curved_tops_mode(object->config().nonplanar_mode.value);
     });
-    auto is_banned = [&cfg, curved_tops](const std::string &key) {
+    const bool z_rivets = std::any_of(print.objects().begin(), print.objects().end(), [](const PrintObject *object) {
+        for (size_t i = 0; i < object->num_printing_regions(); ++i)
+            if (object->printing_region(i).config().z_rivets.value)
+                return true;
+        return false;
+    });
+    auto is_banned = [&cfg, curved_tops, z_rivets](const std::string &key) {
         if (key.compare(0, 17, "nonplanar_curved_") == 0 && !curved_tops) return true;
+        if (key.compare(0, 7, "z_rivet") == 0 && !z_rivets) return true;
         if (key == "nonplanar_adaptive_bands")
             if (const auto *opt = cfg.option<ConfigOptionBool>(key); opt != nullptr && !opt->value)
                 return true;
@@ -8052,6 +8058,8 @@ std::string GCode::extrude_entity(const ExtrusionEntity&                     ent
         if (this->defer_planar_material(entity, description, speed, gcode))
             return gcode;
     }
+    if (const auto *plug = dynamic_cast<const ZRivetPlugPath *>(&entity))
+        return this->extrude_z_rivet_plug(*plug);
     if (const ExtrusionPath* path = dynamic_cast<const ExtrusionPath*>(&entity))
         return this->extrude_path(*path, description, speed);
     else if (const ExtrusionMultiPath* multipath = dynamic_cast<const ExtrusionMultiPath*>(&entity))
@@ -8129,89 +8137,6 @@ std::string GCode::extrude_curved_tops(const Print &print, const std::vector<Obj
                 gcode += this->extrude_path(path, is_perimeter(path.role()) ? "perimeter" : "infill");
     }
     return gcode;
-}
-
-void GCode::band_curved_tops(const Print &print)
-{
-    for (const PrintObject *object : print.objects()) {
-        const Nonplanar::RepairHints *hints = object->nonplanar_repair();
-        const auto planned = m_nonplanar_deferral.find(object);
-        if (!curved_tops_mode(object->config().nonplanar_mode.value) || hints == nullptr || hints->banded_surfaces.empty() ||
-            hints->band_height <= 0. || planned == m_nonplanar_deferral.end())
-            continue;
-        std::map<int, std::vector<double>> tops;
-        for (const NonplanarSurface &surface : object->nonplanar_surfaces())
-            if (hints->banded_surfaces.count(surface.stable_id) != 0) {
-                const double lo = surface.stats.min.z, hi = surface.stats.max.z;
-                const int    n  = std::max(1, int(std::ceil((hi - lo) / hints->band_height - 1e-6)));
-                for (int k = 1; k <= n; ++k)
-                    tops[surface.stable_id].push_back(lo + (hi - lo) * k / n);
-            }
-        if (tops.empty())
-            continue;
-        const auto &layers = object->layers();
-        auto band_slot = [&layers](double z) {
-            const auto it = std::lower_bound(layers.begin(), layers.end(), z - EPSILON,
-                                             [](const Layer *layer, double v) { return layer->print_z < v; });
-            return 2 * int(it == layers.end() ? layers.size() - 1 : size_t(it - layers.begin())) + 1;
-        };
-        NonplanarDeferral &plan = planned->second;
-        if (plan.layers.size() < layers.size())
-            plan.layers.resize(layers.size());
-        for (const Layer *layer : layers)
-            for (const LayerRegion *layerm : layer->regions()) {
-                std::vector<const ExtrusionPath *> paths;
-                std::function<void(const ExtrusionEntity *)> collect = [&](const ExtrusionEntity *e) {
-                    if (auto *path = dynamic_cast<const ExtrusionPath *>(e)) paths.push_back(path);
-                    else if (auto *loop = dynamic_cast<const ExtrusionLoop *>(e)) for (const ExtrusionPath &q : loop->paths) paths.push_back(&q);
-                    else if (auto *multi = dynamic_cast<const ExtrusionMultiPath *>(e)) for (const ExtrusionPath &q : multi->paths) paths.push_back(&q);
-                    else if (auto *c = dynamic_cast<const ExtrusionEntityCollection *>(e)) for (const ExtrusionEntity *child : c->entities) collect(child);
-                };
-                for (const ExtrusionEntity *e : layerm->perimeters.entities) collect(e);
-                for (const ExtrusionEntity *e : layerm->fills.entities) collect(e);
-                const int base = 2 * int(layer->id());
-                for (const ExtrusionPath *path : paths) {
-                    const auto band = tops.find(path->source_surface_id);
-                    const Points3 &pts = path->polyline.points;
-                    if (!path->nonplanar_source || band == tops.end() || pts.size() < 2)
-                        continue;
-                    bool reversed = false;
-                    if (plan.find(layer->id(), path->source_path_id, path->polyline, reversed) != nullptr)
-                        continue;
-                    std::vector<std::pair<double, int>> breaks;
-                    double s = 0.;
-                    bool   early = false;
-                    auto slot_of = [&](double z) {
-                        const auto top = std::lower_bound(band->second.begin(), band->second.end(), z - EPSILON);
-                        return std::min(base, band_slot(top == band->second.end() ? band->second.back() : *top));
-                    };
-                    for (size_t i = 1; i < pts.size(); ++i) {
-                        const double za = unscale<double>(pts[i - 1].z()), zb = unscale<double>(pts[i].z());
-                        const double length = (pts[i].to_point() - pts[i - 1].to_point()).cast<double>().norm();
-                        std::vector<double> cuts { 0. };
-                        for (const double level : band->second)
-                            if ((level - za) * (level - zb) < 0.)
-                                cuts.push_back((level - za) / (zb - za));
-                        std::sort(cuts.begin(), cuts.end());
-                        cuts.push_back(1.);
-                        for (size_t k = 0; k + 1 < cuts.size(); ++k) {
-                            const double t    = 0.5 * (cuts[k] + cuts[k + 1]);
-                            const int    slot = slot_of(za + t * (zb - za));
-                            early |= slot < base;
-                            if (breaks.empty() || breaks.back().second != slot)
-                                breaks.emplace_back(s + cuts[k] * length, slot);
-                        }
-                        s += length;
-                    }
-                    if (!early)
-                        continue;
-                    const Polyline xy = path->polyline.to_polyline();
-                    plan.layers[layer->id()][path->source_path_id].push_back(
-                        { xy.points.front(), xy.points[1], xy.points[xy.points.size() - 2], xy.points.back(), s, std::move(breaks) });
-                    ++plan.advanced_paths;
-                }
-            }
-    }
 }
 
 void GCode::queue_advanced_conformal(const Print &print)
@@ -8407,46 +8332,7 @@ std::string GCode::emit_deferred_material(int slot, unsigned int extruder_id)
                 paths.insert(paths.end(), next.begin(), next.end());
                 emitted[end] = true;
             }
-            std::vector<ExtrusionPath> roads = curved_roads(m_layer, paths, m_nonplanar_clearance, this->last_pos());
-            if (const auto *hints = m_layer != nullptr ? m_layer->object()->nonplanar_repair() : nullptr;
-                hints != nullptr && hints->banded_surfaces.count(surface) != 0 && roads.size() > 1) {
-                std::vector<ExtrusionPath> ordered;
-                ordered.reserve(roads.size());
-                std::vector<bool> used(roads.size(), false);
-                Point at = this->last_pos();
-                for (size_t n = 0; n < roads.size(); ++n) {
-                    size_t best = 0;
-                    bool   flip = false;
-                    double bd   = std::numeric_limits<double>::max();
-                    for (size_t j = 0; j < roads.size(); ++j) {
-                        if (used[j] || roads[j].polyline.points.empty()) continue;
-                        const double d0 = (roads[j].polyline.points.front().to_point() - at).cast<double>().squaredNorm();
-                        if (d0 < bd) bd = d0, best = j, flip = false;
-                        if (roads[j].can_reverse())
-                            if (const double d1 = (roads[j].polyline.points.back().to_point() - at).cast<double>().squaredNorm(); d1 < bd)
-                                bd = d1, best = j, flip = true;
-                    }
-                    if (bd == std::numeric_limits<double>::max()) break;
-                    used[best] = true;
-                    if (flip) roads[best].reverse();
-                    at = roads[best].polyline.points.back().to_point();
-                    ordered.push_back(std::move(roads[best]));
-                }
-                roads = std::move(ordered);
-                const double climb = std::tan(Geometry::deg2rad(std::max(1., m_config.nonplanar_curved_max_angle.value)));
-                for (size_t i = 1; i < roads.size(); ++i) {
-                    const Points3 &prev = roads[i - 1].polyline.points;
-                    Points3       &next = roads[i].polyline.points;
-                    if (prev.empty() || next.empty() || roads[i].role() != roads[i - 1].role() ||
-                        roads[i].distance_to_top != roads[i - 1].distance_to_top)
-                        continue;
-                    const Vec3d  gap = unscale(next.front()) - unscale(prev.back());
-                    const double xy  = gap.head<2>().norm();
-                    if (xy > 1e-3 && xy <= 2. * roads[i].width && std::abs(gap.z()) <= climb * xy)
-                        next.insert(next.begin(), prev.back());
-                }
-            }
-            for (const auto &path : roads)
+            for (const auto &path : curved_roads(m_layer, paths, m_nonplanar_clearance, this->last_pos()))
                 gcode += this->extrude_path(path, is_perimeter(path.role()) ? "perimeter" : "infill");
         } else gcode += this->extrude_entity(*d.entity, d.description, d.speed);
         m_emitting_deferred = false;
@@ -8583,18 +8469,30 @@ std::string GCode::extrude_perimeters(const Print &print, const std::vector<Obje
     return gcode;
 }
 
+std::string GCode::extrude_z_rivet_plug(const ZRivetPlugPath &plug)
+{
+    char buf[128];
+    sprintf(buf, "; Z_RIVET_PLUG volume=%.4f depth=%.3f diameter=%.3f\n", plug.mm3_per_mm * unscale<double>(plug.polyline.to_polyline().length()),
+            plug.height, plug.width);
+    return buf + this->extrude_path(plug, "z-rivet plug", 0.) + "; Z_RIVET_PLUG_END\n";
+}
+
 std::string GCode::extrude_infill(const Print &print, const std::vector<ObjectByExtruder::Island::Region> &by_region, bool ironing)
 {
     std::string                                   gcode;
     std::vector<const ExtrusionEntity*>           extrusions;
     std::vector<std::unique_ptr<ExtrusionEntity>> reversed;
     const char*                                   extrusion_name = ironing ? "ironing" : "infill";
+    std::vector<const ExtrusionEntity*>           pours;
     for (const ObjectByExtruder::Island::Region &region : by_region)
         if (! region.infills.empty()) {
             extrusions.clear();
             extrusions.reserve(region.infills.size());
+            pours.clear();
             for (const ExtrusionEntity *ee : region.infills)
-                if ((ee->role() == erIroning) == ironing &&
+                if (!ironing && is_z_rivet_pour(*ee))
+                    pours.emplace_back(ee);
+                else if ((ee->role() == erIroning) == ironing &&
                     !(curved_tops_mode(m_config.nonplanar_mode.value) && has_nonplanar_source(*ee)))
                     extrusions.emplace_back(ee);
             if (! extrusions.empty()) {
@@ -8659,47 +8557,14 @@ std::string GCode::extrude_infill(const Print &print, const std::vector<ObjectBy
                 }
                 }
             }
+            if (!pours.empty()) {
+                m_config.apply(print.get_print_region(&region - &by_region.front()).config());
+                std::vector<std::unique_ptr<ExtrusionEntity>> unused;
+                chain_and_reorder_extrusion_entities(pours, m_last_pos.to_point(), unused);
+                for (const ExtrusionEntity *pour : pours)
+                    gcode += this->extrude_entity(*static_cast<const ExtrusionEntityCollection *>(pour)->entities.front(), extrusion_name);
+            }
         }
-    return gcode;
-}
-
-static bool macro_moves_head(const std::string &gcode)
-{
-    std::istringstream in(gcode);
-    for (std::string line; std::getline(in, line);) {
-        const size_t b = line.find_first_not_of(" \t");
-        if (b == std::string::npos || (line[b] != 'G' && line[b] != 'g'))
-            continue;
-        const size_t e    = line.find_first_not_of("0123456789", b + 1);
-        const int    code = e == b + 1 ? -1 : std::atoi(line.substr(b + 1, e - b - 1).c_str());
-        if ((code >= 0 && code <= 3) || (code >= 28 && code <= 30))
-            return true;
-    }
-    return false;
-}
-
-std::string GCode::curved_level_marker(const Print &print, double z)
-{
-    std::string gcode;
-    char        buf[80];
-    gcode += ";" + GCodeProcessor::reserved_tag(GCodeProcessor::ETags::Layer_Change) + "\n";
-    sprintf(buf, print.is_BBL_printer() ? "; Z_HEIGHT: %g\n" : ";Z:%g\n", z);
-    gcode += buf;
-    sprintf(buf, ";%s%g\n", GCodeProcessor::reserved_tag(GCodeProcessor::ETags::Height).c_str(), m_last_height);
-    gcode += buf;
-    auto macro = [&](const char *key, const std::string &templ, int layer_num) {
-        if (templ.empty())
-            return std::string();
-        DynamicConfig config;
-        config.set_key_value("layer_num",   new ConfigOptionInt(layer_num));
-        config.set_key_value("layer_z",     new ConfigOptionFloat(z));
-        config.set_key_value("max_layer_z", new ConfigOptionFloat(m_max_layer_z));
-        std::string out = this->placeholder_parser_process(key, templ, m_writer.filament()->id(), &config) + "\n";
-        return macro_moves_head(out) ? std::string() : out;
-    };
-    gcode += macro("before_layer_change_gcode", print.config().before_layer_change_gcode.value, m_layer_index + 1);
-    gcode += m_writer.update_progress(++ m_layer_index, m_layer_count);
-    gcode += macro("layer_change_gcode", print.config().layer_change_gcode.value, m_layer_index);
     return gcode;
 }
 
@@ -8794,7 +8659,7 @@ std::string GCode::extrude_conformal_patches(const Print &print, const std::vect
                             Nonplanar::order_pass_roads(order, b, pass_end[k], reordered);
                     }
                 std::vector<ExtrusionPathConformal> oriented;
-                Nonplanar::orient_free_roads(order, oriented, 0.1, patch.kind == Nonplanar::PatchKind::Volume && object.conformal().morph_strips);
+                Nonplanar::orient_free_roads(order, oriented, 0.1, patch.kind == Nonplanar::PatchKind::Volume && conformal.morph_strips);
                 std::deque<ExtrusionPathConformal> fuzzed;
                 if (patch.kind == Nonplanar::PatchKind::Overhang || patch.kind == Nonplanar::PatchKind::Volume) {
                     const FuzzySkinConfig fuzzy = Feature::FuzzySkin::fuzzy_skin_config(region.config(), int(layer->id()));
@@ -9369,7 +9234,7 @@ std::string GCode::extrude_multiplanar_chunk(const Nonplanar::ConformalPatch &pa
             const ExtrusionPathConformal *next = i + 1 < paths.size() ? paths[i + 1] : nullptr;
             const bool flows_on = patch.free_travel && next != nullptr &&
                                   (to_writer(next->polyline.points.front()) - m_writer.get_position()).norm() < 0.01;
-            static const double keep_primed = [] { const char *v = std::getenv("NP_NATIVE_KEEP_PRIMED"); return v != nullptr ? std::max(0., std::atof(v)) : 3.; }();
+            static const double keep_primed = [] { const char *v = research_switch("NP_NATIVE_KEEP_PRIMED"); return v != nullptr ? std::max(0., std::atof(v)) : 3.; }();
             const bool keep_short = keep_primed > 0. && next != nullptr &&
                                     (to_writer(next->polyline.points.front()) - m_writer.get_position()).norm() < keep_primed;
             reach = flows_on ? Reach::Primed :
@@ -9389,6 +9254,46 @@ std::string GCode::extrude_multiplanar_chunk(const Nonplanar::ConformalPatch &pa
         gcode += m_writer.travel_to_z(std::max(m_writer.get_position().z(), top + hop), "lift off the chunk", true, this->conformal_max_speed_z());
     }
     gcode += m_writer.end_inverse_time();
+    return gcode;
+}
+
+static bool macro_moves_head(const std::string &gcode)
+{
+    std::istringstream in(gcode);
+    for (std::string line; std::getline(in, line);) {
+        const size_t b = line.find_first_not_of(" \t");
+        if (b == std::string::npos || (line[b] != 'G' && line[b] != 'g'))
+            continue;
+        const size_t e    = line.find_first_not_of("0123456789", b + 1);
+        const int    code = e == b + 1 ? -1 : std::atoi(line.substr(b + 1, e - b - 1).c_str());
+        if ((code >= 0 && code <= 3) || (code >= 28 && code <= 30))
+            return true;
+    }
+    return false;
+}
+
+std::string GCode::curved_level_marker(const Print &print, double z)
+{
+    std::string gcode;
+    char        buf[80];
+    gcode += ";" + GCodeProcessor::reserved_tag(GCodeProcessor::ETags::Layer_Change) + "\n";
+    sprintf(buf, print.is_BBL_printer() ? "; Z_HEIGHT: %g\n" : ";Z:%g\n", z);
+    gcode += buf;
+    sprintf(buf, ";%s%g\n", GCodeProcessor::reserved_tag(GCodeProcessor::ETags::Height).c_str(), m_last_height);
+    gcode += buf;
+    auto macro = [&](const char *key, const std::string &templ, int layer_num) {
+        if (templ.empty())
+            return std::string();
+        DynamicConfig config;
+        config.set_key_value("layer_num",   new ConfigOptionInt(layer_num));
+        config.set_key_value("layer_z",     new ConfigOptionFloat(z));
+        config.set_key_value("max_layer_z", new ConfigOptionFloat(m_max_layer_z));
+        std::string out = this->placeholder_parser_process(key, templ, m_writer.filament()->id(), &config) + "\n";
+        return macro_moves_head(out) ? std::string() : out;
+    };
+    gcode += macro("before_layer_change_gcode", print.config().before_layer_change_gcode.value, m_layer_index + 1);
+    gcode += m_writer.update_progress(++ m_layer_index, m_layer_count);
+    gcode += macro("layer_change_gcode", print.config().layer_change_gcode.value, m_layer_index);
     return gcode;
 }
 
@@ -9572,7 +9477,7 @@ std::string GCode::extrude_field_patch(const Nonplanar::ConformalPatch &patch)
     bool         glide        = false, glide_inside = false;
     const bool   infill_glide = field.given() && m_config.reduce_infill_retraction && m_config.sparse_infill_density.value > 0;
     for (size_t k = 0; k < patch.shell_paths.size(); ++k) {
-        if (pass_prints(patch.shell_paths[k])) {
+        if (Nonplanar::pass_prints(patch.shell_paths[k])) {
             m_last_height = level_height(patch.shell_paths[k]);
             gcode += this->curved_level_marker(*m_print, m_nominal_z + level_top(patch.shell_paths[k]));
         }
@@ -10296,11 +10201,8 @@ double GCode::nonplanar_travel_z(const Vec2d *from, const Vec2d *to, bool nozzle
 {
     double z;
     if (m_material_columns && from != nullptr && to != nullptr && nozzle_only) {
-        Nonplanar::HeadEnvelope nozzle = this->nonplanar_head();
-        nozzle.boxes.erase(std::remove_if(nozzle.boxes.begin(), nozzle.boxes.end(), [](const Nonplanar::HeadBox &b) { return !b.nozzle; }),
-                           nozzle.boxes.end());
-        z = safe_travel_z(*m_material_columns, nozzle, *from, *to,
-                          std::max(0.1, m_writer.filament() != nullptr ? m_config.z_hop.get_at(m_writer.filament()->id()) : 0.));
+        z = safe_travel_z(*m_material_columns, this->nonplanar_head(), *from, *to,
+                          std::max(0.1, m_writer.filament() != nullptr ? m_config.z_hop.get_at(m_writer.filament()->id()) : 0.), true);
     } else {
         const double hop = this->nonplanar_hop();
         z = m_material_columns && from != nullptr && to != nullptr ? safe_travel_z(*m_material_columns, this->nonplanar_head(), *from, *to, hop) :
@@ -10406,7 +10308,7 @@ const Nonplanar::HeadEnvelope &GCode::nonplanar_head()
 
 static bool rotary_nearest_turn(const RotaryKinematics &rotary, const JointPose &current, JointPose &goal)
 {
-    static const bool enabled = [] { const char *v = std::getenv("NP_ROTARY_NEAREST_TURN"); return v != nullptr && std::atoi(v) != 0; }();
+    static const bool enabled = [] { const char *v = research_switch("NP_ROTARY_NEAREST_TURN"); return v != nullptr && std::atoi(v) != 0; }();
     if (enabled)
         for (int i = 0; i < 2; ++i)
             if (rotary.geometry().axes[i].continuous)
@@ -12330,6 +12232,16 @@ std::string GCode::travel_to(const Point& point, ExtrusionRole role, std::string
         if (m_force_safe_travel)
             safe = m_nonplanar_heights.travel_height(xy, m_nonplanar_clearance,
                 base + hop);
+        double col_safe = -std::numeric_limits<double>::infinity();
+        if (m_material_columns) {
+            Vec2d from_xy = m_writer.get_position().head<2>();
+            for (size_t i = 1; i < travel.size(); ++i) {
+                const Vec2d to_xy = this->point_to_gcode(travel.points[i]);
+                col_safe = std::max(col_safe, this->nonplanar_travel_z(&from_xy, &to_xy, true));
+                from_xy = to_xy;
+            }
+            safe = std::max(safe, col_safe);
+        }
         bool sloped = false;
         double lift = 0.;
         const bool short_hop = m_layer != nullptr && curved_tops_mode(m_layer->object()->config().nonplanar_mode.value) &&
@@ -12345,6 +12257,8 @@ std::string GCode::travel_to(const Point& point, ExtrusionRole role, std::string
             sloped = primed_slope_lift >= 0. || 2. * lift < 2. * safe - from.z() - to.z();
             if (sloped && native_keep_primed)
                 sloped = m_nonplanar_heights.supports_travel(from + Vec3d(0., 0., lift), to + Vec3d(0., 0., lift), primed_support_gap);
+            if (sloped && m_material_columns)
+                sloped = std::min(from.z(), to.z()) + lift >= col_safe;
             if (sloped)
                 safe = from.z() + lift;
         }

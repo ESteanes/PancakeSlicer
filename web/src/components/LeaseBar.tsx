@@ -24,7 +24,7 @@ function SharedEditingBar() {
   const foreign = (keys: string[]) => keys.map(key => status.locks[key]).find(lock => lock && lock.session !== sessionId);
   const run = (action: () => Promise<void>) => {
     setBusy(true);
-    void action().catch(error => toast(error instanceof Error ? error.message : String(error))).finally(() => setBusy(false));
+    void action().catch(error => toast('shared_editing_failed', { detail: error instanceof Error ? error.message : String(error) })).finally(() => setBusy(false));
   };
   const settingsHolder = foreign(['settings']), objectHolder = foreign(selected);
   return <div className="lease-bar" role="region" aria-label="Shared editing">
@@ -67,9 +67,9 @@ function LegacyLeaseBar() {
   }, [show]);
   if (!show) return null;
   return (
-    <div className="lease-bar" role="status">
+    <div className="app-notices"><div className="lease-bar" role="status">
       <span>Currently open in another tab or device{context.holder && <><Sep/>{context.holder.label}</>}</span>
       <button type="button" className="btn-primary" disabled={busy} aria-busy={busy} onClick={takeControl}>{busy ? 'Taking control…' : 'Take control'}</button>
-    </div>
+    </div></div>
   );
 }

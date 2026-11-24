@@ -5,9 +5,9 @@ import { getState, setState, toast, type PlateObject, type State } from './store
 import { splitShared, sharedChanges, applyShared, joinShared, equalResource, historyChange, type ResourceChange } from '../persist/shared-document';
 
 const DOC_KEYS = [
-  'objects', 'projectPlates', 'plateIndex', 'project', 'projectName', 'projectMaterials', 'projectPresets', 'projectNotice',
-  'events', 'filamentSlots', 'slotColours', 'flush', 'printer', 'process', 'dirty', 'filamentEdits', 'bedType', 'selected',
-  'wipeTowerPos', 'mixes', 'processVariant', 'profileSnapshots', 'projectProfileContexts', 'collaborationOrder',
+  'objects', 'projectPlates', 'plateIndex', 'project', 'projectName', 'projectMaterials', 'projectPresets', 'projectSlotValues', 'projectSlots',
+  'events', 'printer', 'process', 'dirty', 'filamentEdits', 'selected',
+  'wipeTowerPos', 'processVariant', 'profileSnapshots', 'projectProfileContexts', 'collaborationOrder',
 ] as const satisfies readonly (keyof State)[];
 export type Doc = Pick<State, (typeof DOC_KEYS)[number]>;
 
@@ -32,9 +32,12 @@ const idOf = (v: object) => ids.get(v) ?? (ids.set(v, ++lastId), lastId);
 const objects = (list: PlateObject[]) => list.map((o) => ({ ...o, geometry: `#${idOf(o.geometry)}`,
   volumes: o.volumes?.map((v) => ({ ...v, geometry: `#${idOf(v.geometry)}` })),
 }));
+const BOOKKEEPING = new Set(['revision', 'edited']);
+const record = (v: object) => Object.fromEntries(Object.keys(v).filter((k) => !BOOKKEEPING.has(k)).sort().map((k) => [k, (v as Record<string, unknown>)[k]]));
 const contents = (key: (typeof DOC_KEYS)[number], value: unknown) => JSON.stringify(
   key === 'objects' ? objects(value as PlateObject[]) : key === 'projectPlates' ? (value as Doc['projectPlates']).map((p) => ({ ...p, objects: objects(p.objects) })) : value,
-  (_, v: unknown) => v && typeof v === 'object' && (v instanceof Blob || v instanceof Map) ? `#${idOf(v)}` : v);
+  (_, v: unknown) => v && typeof v === 'object' && (v instanceof Blob || v instanceof Map) ? `#${idOf(v)}`
+    : key === 'profileSnapshots' && v && typeof v === 'object' && !Array.isArray(v) ? record(v) : v);
 export const sameContents = (a: Doc, b: Doc) => DOC_KEYS.every((k) => k === 'selected' || a[k] === b[k] || contents(k, a[k]) === contents(k, b[k]));
 
 const listeners = new Set<() => void>();
@@ -122,6 +125,7 @@ function restore(doc: Doc) {
   restoring = true;
   try {
     setState(doc);
+    void import('../profiles/slot-writes').then(async ({ adoptStrip }) => adoptStrip((await import('../profiles/slots')).documentStrip(doc)));
     const s = getState();
     if (s.job.plateSignature && s.job.stale && plateSignature(s) === s.job.plateSignature)
       setState({ job: { ...s.job, stale: false } });
@@ -157,7 +161,7 @@ function restoreChanges(from: Doc, to: Doc): boolean {
   if (import.meta.env.MODE === 'demo') { restore(to); return true; }
   const change = historyChange(from, to, snapshot());
   if (!change) {
-    toast('This edit cannot be undone because an affected object or setting has changed.');
+    toast('shared_undo_blocked');
     return false;
   }
   restore(change.doc as unknown as Doc);

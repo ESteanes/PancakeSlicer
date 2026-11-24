@@ -85,8 +85,9 @@ struct SettledRepairs
     RepairHints              hints;
     std::set<int>            planar_surfaces;
     bool                     fallback_off = false;
+    bool                     fallback_zaa = false;
     std::vector<std::string> access_warnings;
-    std::vector<std::string> guard_warnings;
+    std::vector<CodedWarning> guard_warnings;
 };
 
 class Writer
@@ -153,10 +154,16 @@ std::string settled_bytes(const SettledRepairs &r)
     w.put_count(r.planar_surfaces.size());
     for (int id : r.planar_surfaces) w.put(id);
     w.put(uint8_t(r.fallback_off));
+    w.put(uint8_t(r.fallback_zaa));
     w.put_count(r.access_warnings.size());
     for (const std::string &warning : r.access_warnings) w.put_string(warning);
     w.put_count(r.guard_warnings.size());
-    for (const std::string &warning : r.guard_warnings) w.put_string(warning);
+    for (const CodedWarning &warning : r.guard_warnings) {
+        w.put_string(warning.code.code);
+        w.put_string(warning.code.object);
+        w.put_string(warning.code.params);
+        w.put_string(warning.message);
+    }
     return std::move(w.out);
 }
 
@@ -181,24 +188,39 @@ bool settled_from_bytes(const std::string &in, SettledRepairs &r)
     rd.get(h.travel_lift);
     h.travel_layers.resize(rd.count(sizeof(uint64_t)));
     for (size_t &l : h.travel_layers) { uint64_t v = 0; rd.get(v); l = size_t(v); }
-    uint8_t finish = 0, off = 0;
+    uint8_t finish = 0, off = 0, zaa = 0;
     rd.get(finish);
     h.curved_finish = RepairHints::CurvedFinish(std::min<uint8_t>(finish, uint8_t(RepairHints::CurvedFinish::NativeMesh)));
     for (size_t i = 0, n = rd.count(sizeof(int)); i < n; ++i) { int id = 0; rd.get(id); r.planar_surfaces.insert(id); }
     rd.get(off);
     r.fallback_off = off != 0;
+    rd.get(zaa);
+    r.fallback_zaa = zaa != 0;
     r.access_warnings.resize(rd.count(sizeof(uint64_t)));
     for (std::string &warning : r.access_warnings) rd.get_string(warning);
     r.guard_warnings.resize(rd.count(sizeof(uint64_t)));
-    for (std::string &warning : r.guard_warnings) rd.get_string(warning);
+    for (CodedWarning &warning : r.guard_warnings) {
+        rd.get_string(warning.code.code);
+        rd.get_string(warning.code.object);
+        rd.get_string(warning.code.params);
+        rd.get_string(warning.message);
+    }
     return rd.done();
 }
 
 std::mutex                                         settled_mutex;
-struct ExportNote { bool converged = false; std::map<size_t, std::vector<std::string>> access_warnings; std::vector<std::string> guard_warnings; };
+struct ExportNote { bool converged = false; std::map<size_t, std::vector<std::string>> access_warnings; std::vector<CodedWarning> guard_warnings; };
 std::map<const Print *, ExportNote>                export_notes;
 std::map<size_t, std::vector<std::string>>         primed_access_warnings;
-std::map<size_t, std::vector<std::string>>         primed_guard_warnings;
+std::map<size_t, std::vector<CodedWarning>>        primed_guard_warnings;
+
+bool repairs_checked(const Print &print) { return print.config().nonplanar_collision_check.value != NonplanarCollisionCheck::Off; }
+
+std::string hints_key(const std::string &key, const Print &print)
+{
+    return sha256_hex(key + "\nnonplanar_collision_check=" + print.config().opt_serialize("nonplanar_collision_check") +
+                      "\nnonplanar_repair_iterations=" + print.config().opt_serialize("nonplanar_repair_iterations"));
+}
 
 }
 
@@ -360,8 +382,8 @@ void stage_cache_prime(Print &print)
             continue;
         object->m_stage_cache_key = stage_cache_key(*object);
         std::string bytes;
-        if (curved_tops_mode(object->config().nonplanar_mode.value) && !object->m_nonplanar_repair &&
-            stage_cache_read(object->m_stage_cache_key, "hints", bytes)) {
+        if (curved_tops_mode(object->config().nonplanar_mode.value) && !object->m_nonplanar_repair && repairs_checked(print) &&
+            !object->m_stage_cache_key.empty() && stage_cache_read(hints_key(object->m_stage_cache_key, print), "hints", bytes)) {
             SettledRepairs settled;
             if (!settled_from_bytes(bytes, settled)) {
                 BOOST_LOG_TRIVIAL(warning) << "Stage cache: unreadable repair hints for " << object->model_object()->name << "; repairing";
@@ -372,7 +394,8 @@ void stage_cache_prime(Print &print)
             if (settled.fallback_off) {
                 object->m_curved_fallback_off = true;
                 object->m_curved_fallback_zaa = false;
-            }
+            } else if (settled.fallback_zaa)
+                object->m_curved_fallback_zaa = true;
             std::lock_guard<std::mutex> lock(settled_mutex);
             primed_access_warnings[object->id().id] = std::move(settled.access_warnings);
             primed_guard_warnings[object->id().id]  = std::move(settled.guard_warnings);
@@ -388,16 +411,16 @@ void stage_cache_converged(const Print &print, bool converged, const std::map<si
     export_notes[&print].access_warnings = access_warnings;
 }
 
-void stage_cache_note_guard_warnings(const Print &print, const std::vector<std::string> &warnings)
+void stage_cache_note_guard_warnings(const Print &print, const std::vector<CodedWarning> &warnings)
 {
     std::lock_guard<std::mutex> lock(settled_mutex);
     export_notes[&print].guard_warnings = warnings;
 }
 
-std::vector<std::string> stage_cache_guard_warnings(const Print &print)
+std::vector<CodedWarning> stage_cache_guard_warnings(const Print &print)
 {
     std::lock_guard<std::mutex> lock(settled_mutex);
-    std::vector<std::string> out;
+    std::vector<CodedWarning> out;
     for (const PrintObject *object : print.objects())
         if (const auto it = primed_guard_warnings.find(object->id().id); it != primed_guard_warnings.end())
             out.insert(out.end(), it->second.begin(), it->second.end());
@@ -418,7 +441,10 @@ void stage_cache_record(const Print &print)
         const ExportNote note = export_notes[&print];
         export_notes.erase(&print);
         for (const PrintObject *object : print.objects()) {
-            if (!note.converged || object->m_stage_cache_key.empty() || !curved_tops_mode(object->config().nonplanar_mode.value))
+            primed_access_warnings.erase(object->id().id);
+            primed_guard_warnings.erase(object->id().id);
+            if (!note.converged || object->m_stage_cache_key.empty() || !curved_tops_mode(object->config().nonplanar_mode.value) ||
+                !repairs_checked(print))
                 continue;
             SettledRepairs settled;
             if (object->m_nonplanar_repair)
@@ -427,11 +453,12 @@ void stage_cache_record(const Print &print)
             settled.hints.curved_top_areas.clear();
             settled.planar_surfaces = object->m_curved_planar_surfaces;
             settled.fallback_off    = object->m_curved_fallback_off;
+            settled.fallback_zaa    = object->m_curved_fallback_zaa;
             if (const auto it = note.access_warnings.find(object->id().id); it != note.access_warnings.end())
                 settled.access_warnings = it->second;
-            const std::string prefix = object->model_object()->name + ": ";
-            for (const std::string &warning : note.guard_warnings)
-                if (warning.compare(0, prefix.size(), prefix) == 0)
+            const std::string name = warning_object(object->model_object()->name);
+            for (const CodedWarning &warning : note.guard_warnings)
+                if (warning.code.object == name)
                     settled.guard_warnings.push_back(warning);
             const RepairHints &h = settled.hints;
             const bool repaired = !h.surface_caps.empty() || !h.ironing_drops.empty() || !h.order_bands.empty() || !h.uniform_beads.empty() ||
@@ -439,8 +466,8 @@ void stage_cache_record(const Print &print)
                                   h.travel_lift > 0. || h.curved_finish != RepairHints::CurvedFinish::Blended ||
                                   !settled.planar_surfaces.empty() || settled.fallback_off;
             std::string cached;
-            if (repaired && !stage_cache_read(object->m_stage_cache_key, "hints", cached))
-                stage_cache_write(object->m_stage_cache_key, "hints", settled_bytes(settled));
+            if (const std::string key = hints_key(object->m_stage_cache_key, print); repaired && !stage_cache_read(key, "hints", cached))
+                stage_cache_write(key, "hints", settled_bytes(settled));
         }
     }
 }
