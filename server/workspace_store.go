@@ -32,6 +32,8 @@ type workspaceStore struct {
 	stamp          [2]int64
 	views          map[string]any
 	leases         map[string]*projectLease
+	objectLocks    map[string]map[string]*editLock
+	projectViewers map[string]map[*projectViewer]struct{}
 	watch          sync.Mutex
 	sessionChanged chan struct{}
 }
@@ -65,11 +67,12 @@ func (st *workspaceStore) sessionRevision() uint64 {
 }
 
 type workspaceProject struct {
-	Record   json.RawMessage `json:"record"`
-	Archived bool            `json:"archived,omitempty"`
-	Revision uint64          `json:"revision"`
-	Folder   string          `json:"folder,omitempty"`
-	Versions *versionIndex   `json:"versions,omitempty"`
+	Record        json.RawMessage `json:"record"`
+	Collaborative bool            `json:"collaborative,omitempty"`
+	Archived      bool            `json:"archived,omitempty"`
+	Revision      uint64          `json:"revision"`
+	Folder        string          `json:"folder,omitempty"`
+	Versions      *versionIndex   `json:"versions,omitempty"`
 }
 type workspaceDraft struct {
 	ID        string          `json:"id"`
@@ -363,6 +366,8 @@ func encodeVerbatim[V any](b *bytes.Buffer, m map[string]V, marker string, split
 			b.Write(entry[:at])
 			b.Write(raw)
 			b.Write(entry[at+len("null"):])
+		} else if raw != nil {
+			return fmt.Errorf("Workspace record marker %s is missing.", marker)
 		} else {
 			b.Write(entry)
 		}
@@ -600,7 +605,12 @@ func projectMeta(p workspaceProject) json.RawMessage {
 	raw, _ := json.Marshal(meta)
 	return raw
 }
+func (st *workspaceStore) cachedProjectMeta(id string, p workspaceProject) json.RawMessage {
+	return st.derived("project-meta:"+id, func() any { return projectMeta(p) }).(json.RawMessage)
+}
 func (st *workspaceStore) register(mux *http.ServeMux) {
+	st.collaborationRoutes(mux)
+	mux.HandleFunc("GET /api/projects/open", st.openProjects)
 	st.leaseRoutes(mux)
 	st.folderRoutes(mux)
 	st.thumbnailRoutes(mux)
@@ -613,9 +623,9 @@ func (st *workspaceStore) register(mux *http.ServeMux) {
 					SavedAt float64 `json:"savedAt"`
 				}
 				var rows []listed
-				for _, p := range d.Projects {
+				for id, p := range d.Projects {
 					if p.Archived == archived && p.Record != nil {
-						row := listed{meta: projectMeta(p)}
+						row := listed{meta: st.cachedProjectMeta(id, p)}
 						json.Unmarshal(row.meta, &row)
 						rows = append(rows, row)
 					}
@@ -781,6 +791,13 @@ func (st *workspaceStore) projectWrite(w http.ResponseWriter, r *http.Request, a
 			return
 		}
 		p, exists := d.Projects[id]
+		if p.Collaborative && action == "save" {
+			workspaceFailure(w, 409, "collaboration_required", "This project uses shared editing. Reload the app before saving.", "reload", p.Revision)
+			return
+		}
+		if p.Collaborative && action != "duplicate" && !st.authorizeProjectCommand(w, r, id, p, action) {
+			return
+		}
 		if action != "duplicate" && st.leaseConflict(w, id, r.Header.Get(sessionHeader), p.Revision) {
 			return
 		}
@@ -815,6 +832,11 @@ func (st *workspaceStore) projectWrite(w http.ResponseWriter, r *http.Request, a
 			var meta map[string]json.RawMessage
 			json.Unmarshal(record["meta"], &meta)
 			meta["name"], _ = json.Marshal(in.Name)
+			var doc map[string]json.RawMessage
+			if json.Unmarshal(record["doc"], &doc) == nil && doc != nil {
+				doc["projectName"], _ = json.Marshal(in.Name)
+				record["doc"], _ = json.Marshal(doc)
+			}
 			meta["savedAt"], _ = json.Marshal(time.Now().UnixMilli())
 			record["meta"], _ = json.Marshal(meta)
 			raw, _ := json.Marshal(record)
@@ -843,12 +865,15 @@ func (st *workspaceStore) projectWrite(w http.ResponseWriter, r *http.Request, a
 			workspaceFailure(w, 400, "project_invalid", err.Error(), "export_and_repair", p.Revision)
 			return
 		}
+		if action == "save" && r.Header.Get("X-Orca-Collaboration") == "1" {
+			next.Collaborative = true
+		}
 		sha, err := st.keepRecord(id, next.Record)
 		if err != nil {
 			workspaceFailure(w, 507, "workspace_write_failed", "Uh-oh, couldn't save your work ("+storageCause(err)+"). Keep your draft safe, free up a bit of storage, and retry!", "free_storage_and_retry", p.Revision)
 			return
 		}
-		change := map[string][]versionChange{"save": recordChange(in.Record), "rename": {{Key: "name", Label: "Renamed to " + in.Name}}, "duplicate": {{Label: "Copied"}}}[action]
+		change := map[string][]versionChange{"save": recordChange(in.Record), "rename": {{Key: "name", Label: "Renamed to " + in.Name}}, "duplicate": {{Label: "Copied"}}, "restore": {{Label: "Restored from Trash"}}}[action]
 		if action == "duplicate" {
 			next.Versions = nil
 		}
@@ -861,7 +886,7 @@ func (st *workspaceStore) projectWrite(w http.ResponseWriter, r *http.Request, a
 		if !st.commit(w, d, in.OperationID, digest, response) {
 			return
 		}
-		if action == "save" {
+		if action == "save" && !next.Collaborative {
 			st.claimLease(id, r.Header.Get(sessionHeader))
 		}
 		st.pruneVersionFiles(id, next.Versions)

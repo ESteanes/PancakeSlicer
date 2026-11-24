@@ -129,6 +129,8 @@ export async function importObjects(file: File, allowNew = false, sourceUrl?: st
     const area = await printerBed();
     if (!task.current() || placing !== documentGeneration() || !canImport()) return 0;
     undoable('Import objects', () => setState((state) => objectsPatch(state, [...plates.values()].sort((a, b) => a.index - b.index), area)));
+    const present = new Set(listedPlates(getState()).flatMap(plate => plate.objects.map(object => object.id)));
+    if (!objects.every(object => present.has(object.id))) return 0;
     committed = true;
     if (project) reportProjectSettings(project, report);
     else if (settingsNote) toast('import_project_failed', { name: file.name, settingsNote });

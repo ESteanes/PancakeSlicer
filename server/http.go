@@ -309,6 +309,14 @@ func (s *Server) createJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	req := JobRequest{Orient: r.FormValue("operation") == "orient" || r.FormValue("operation") == "orient-scores", Output: r.FormValue("output"), Filename: r.FormValue("filename")}
+	if raw := r.Header.Get("X-Orca-Project-Snapshot"); raw != "" {
+		var snapshot projectSnapshotRef
+		if len(raw) > 1024 || json.Unmarshal([]byte(raw), &snapshot) != nil || !s.workspace.validProjectSnapshot(snapshot) {
+			workspaceFailure(w, 409, "snapshot_invalid", "The saved project version for this slice is unavailable. Save the project and slice again.", "slice_again", 0)
+			return
+		}
+		req.ProjectSnapshot = &snapshot
+	}
 	if v := r.Header.Get(sessionHeader); len(v) <= 256 {
 		req.Session = v
 	}

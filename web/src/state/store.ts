@@ -1,5 +1,6 @@
 import { observePreference, preferenceText } from '../saved-preferences';
 import { emptyLibrary, type LibraryRecords } from '../profiles/records';
+import { allowEdit } from './edit-guard';
 import { timeInteraction } from '../interaction-metrics';
 import { app } from '../flow/app';
 import { tools } from '../flow/tools';
@@ -8,7 +9,7 @@ import { plateSignature } from '../slice-input';
 import type * as THREE from 'three';
 import { T3 } from '../three-runtime';
 import type { Api } from '../api/client';
-import type { Config, ConfigValue, JobStatus, PresetType } from '../api/types';
+import type { Config, ConfigValue, JobStatus, PresetType, ProjectSnapshot } from '../api/types';
 import type { ProjectPlate } from '../plater/threemf';
 import { OPTIONS, type OptionMode } from '../options';
 import { undo, undoable } from './history';
@@ -139,6 +140,7 @@ export type CalibMenu = 'temperature' | 'max-flowrate' | 'pressure-advance' | 'f
 export type Gizmo = 'none' | 'move' | 'rotate' | 'scale' | 'flatten' | 'cut' | 'slant' | 'measure' | 'layers' | 'brimears' | 'boolean' | 'text' | 'svg' | PaintKind;
 
 export interface JobView {
+  projectSnapshot?: ProjectSnapshot;
   id?: string;
   state: 'idle' | 'submitting' | 'running' | 'done' | 'failed' | 'canceled';
   pct: number;
@@ -238,6 +240,7 @@ export interface State {
   events: LayerEvent[];
   projectPlates: (ProjectPlate & { objects: PlateObject[]; events?: LayerEvent[] })[];
   plateIndex: number;
+  collaborationOrder?: Record<string, number>;
   project: File | null;
   projectName: string | null;
   job: JobView;
@@ -361,6 +364,7 @@ export const getState = () => state;
 export function setState(patch: Partial<State> | ((s: State) => Partial<State>)) {
   const finishTiming = timeInteraction('store');
   let next = { ...state, ...(typeof patch === 'function' ? patch(state) : patch) };
+  if (!allowEdit(state, next)) { finishTiming(); return; }
   const selected = next.selected;
   if (selected && !next.objects.some((o) => o.id === selected.object && o.instances.some((i) => i.id === selected.instance))) {
     next.selected = null;
@@ -389,9 +393,14 @@ export function useStore<T>(sel: (s: State) => T): T {
 
 export const effectiveMode = (s: State): OptionMode => s.developerMode ? 'developer' : s.uiMode;
 
-let nextId = 1;
-export const newId = () => nextId++;
-export const reserveIds = (max: number) => { nextId = Math.max(nextId, max + 1); };
+const usedIds = new Set<number>();
+export const newId = () => {
+  let id: number;
+  do { const bits = crypto.getRandomValues(new Uint32Array(2)); id = (bits[0] & 0xfffff) * 0x100000000 + bits[1]; } while (!id || usedIds.has(id));
+  usedIds.add(id);
+  return id;
+};
+export const reserveIds = (id: number) => { usedIds.add(id); };
 
 export const DEMO_MODELS = ['Bambu Lab A1 mini', 'Bambu Lab A1', 'Bambu Lab P1S', 'Prusa MINI', 'Prusa MINI IS', 'Prodcan3 5-axis BC table', 'Fairino FR3 cell'];
 export const DEFAULT_PRINTER = 'Bambu Lab A1 mini 0.4 nozzle';

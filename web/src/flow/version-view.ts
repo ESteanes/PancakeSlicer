@@ -1,11 +1,12 @@
 import type { ProjectVersion } from '../projects/versions';
 import { setState, type JobView } from '../state/store';
 import { createMachine, type StateNode } from './fsm';
+import { selectSharedPlate } from '../persist/shared-document';
 
 export type VersionViewState = 'latest' | 'opening' | 'viewing' | 'loading-slice';
 interface VersionViewContext { request: number; target: ProjectVersion | null; shown: ProjectVersion | null }
 type VersionViewEvent = { type: 'VIEW'; version: ProjectVersion } | { type: 'SHOWN'; request: number } | { type: 'FAIL'; request: number }
-  | { type: 'SLICE'; request: number; job: JobView } | { type: 'SLICE_FAIL'; request: number } | { type: 'LATEST' } | { type: 'RESTORE' };
+  | { type: 'SLICE'; request: number; job: JobView; plateIndex: number } | { type: 'SLICE_FAIL'; request: number } | { type: 'LATEST' } | { type: 'RESTORE' };
 type Node = StateNode<VersionViewState, VersionViewEvent, VersionViewContext>;
 
 const mine = (c: VersionViewContext, e: { request: number }) => e.request === c.request;
@@ -28,7 +29,7 @@ export const versionView = createMachine<VersionViewState, VersionViewEvent, Ver
     } },
     viewing: shown,
     'loading-slice': { on: { ...shown.on,
-      SLICE: [{ target: 'viewing', guard: mine, action: (_, e) => { setState({ job: e.job }); } }, late],
+      SLICE: [{ target: 'viewing', guard: mine, action: (_, e) => { setState(s => ({ ...selectSharedPlate(s, e.plateIndex), job: e.job })); } }, late],
       SLICE_FAIL: [{ target: 'viewing', guard: mine }, late],
     } },
   },

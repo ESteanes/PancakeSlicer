@@ -5,6 +5,7 @@ import { changeForSave, savedVersionBase } from '../projects/versions';
 import type { ProjectDraft, ProjectDraftMeta, ProjectDraftStore } from '../persist/drafts';
 import type { StoredDoc } from '../persist/session';
 import { clearPlate } from '../actions';
+import { collaborative } from '../persist/project-collaboration';
 import { documentGeneration, leaveDocument, newDocument, snapshot, type Doc } from '../state/history';
 import { clearPlateJobs } from '../plater/plates';
 import { IDLE_JOB, setState } from '../state/store';
@@ -108,7 +109,9 @@ export async function keepProjectVersion(runtime: RecoveryRuntime) {
     const rec = await runtime.storage()?.load(id);
     if (id !== project.get().context.id || gen !== documentGeneration()) return;
     if (!rec || runtime.removed.has(id)) throw failureError(projectFailure({ name: 'ProjectDeletedError', message: 'Oops! We couldn\'t find the saved project on the server, but you can save your local draft as a new copy.' }, id, project.get().context.revision));
-    project.send({ type: 'REBASE', revision: rec.meta.revision ?? 0 });
+    const meta = (await import('../persist/project-collaboration')).collaborative()
+      ? await (await import('./collaboration')).prepareSharedReplacement() : rec.meta;
+    project.send({ type: 'REBASE', revision: meta.revision ?? 0 });
     runtime.resetCaptured();
     await flushProject();
   } catch (error) {
@@ -212,21 +215,33 @@ export async function viewProjectVersion(runtime: RecoveryRuntime, id: string, r
   return true;
 }
 export async function renameProject(runtime: RecoveryRuntime, id: string, name: string) {
-  if (!name.trim()) return;
+  name = name.trim();
+  if (!name) return;
   const storage = runtime.storage();
   if (!storage) throw new Error('Oops! Project storage isn\'t available right now.');
   const current = id === project.get().context.id, gen = documentGeneration();
+  const stillCurrent = () => id === project.get().context.id && gen === documentGeneration();
+  if (current && collaborative()) await flushProject();
   let resumed = false;
+  let revision = 0;
   for (const pending of storage.commands()) if (pending.id === id && pending.kind === 'rename' && pending.name !== undefined) {
-    await storage.rename(id, pending.name); resumed ||= pending.name === name.trim();
+    revision = (await storage.rename(id, pending.name)).revision; resumed ||= pending.name === name;
   }
-  if (current) {
-    if (id === project.get().context.id && gen === documentGeneration()) setState({ projectName: name.trim() });
+  if (current && !collaborative()) {
+    if (stillCurrent()) setState({ projectName: name });
     return;
   }
-  if (resumed) { runtime.publish('saved', id); runtime.refreshList(); return; }
-  await runtime.waitForWrites();
-  await storage.rename(id, name.trim()); runtime.publish('saved', id); runtime.refreshList();
+  if (!resumed) {
+    await runtime.waitForWrites();
+    revision = (await storage.rename(id, name)).revision;
+  }
+  runtime.publish('saved', id); runtime.refreshList();
+  if (current && stillCurrent()) {
+    const { syncSharedProject } = await import('./collaboration');
+    if (!stillCurrent()) return;
+    await syncSharedProject();
+    if (stillCurrent() && project.get().context.revision < revision) await syncSharedProject();
+  }
 }
 interface PendingAction<T> { run(): Promise<T>; matches(command: Readonly<ProjectCommandStatus>): boolean; task: Promise<T> | null }
 const duplicateIntents = new WeakMap<RecoveryRuntime, Map<string, PendingAction<ProjectMeta>>>();
@@ -349,8 +364,11 @@ export async function saveProjectSnapshot(runtime: RecoveryRuntime, capture: {
     const meta = { name: nameOf(document), savedAt: Date.now(), objects: plateCount(document), revision, change: changeForSave(id, document, revision) };
     const committed: CheckpointDocument = { ...stored, recoveryCheckpoint: receipt.checkpoint };
     const acknowledgement = await storage.save(id, meta, committed, meta.objects === 0 ? null : runtime.activeWrite(id, gen, version) ? thumbnail() ?? undefined : undefined);
-    savedVersionBase(id, document);
-    if (runtime.activeWrite(id, gen, version)) project.send({ type: 'SAVED', id, ...meta, ...acknowledgement, checkpoint: receipt.checkpoint });
+    if (acknowledgement.record && runtime.activeWrite(id, gen, version))
+      await (await import('./collaboration')).acceptSharedRecord(acknowledgement.record, document);
+    if (!acknowledgement.record) savedVersionBase(id, document);
+    if (runtime.activeWrite(id, gen, version)) project.send({ type: 'SAVED', id, ...meta, ...acknowledgement,
+      ...(acknowledgement.record ? { name: acknowledgement.record.meta.name, objects: acknowledgement.record.meta.objects } : {}), checkpoint: receipt.checkpoint });
     if (!runtime.activeWrite(id, gen, version) || project.get().value !== 'conflict') {
       await receipt.durable.catch(() => null);
       const drafts = await runtime.drafts().catch(() => null);

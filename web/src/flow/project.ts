@@ -15,6 +15,8 @@ import { importing } from './import';
 import { writesDiscarded } from '../api/access';
 import { versionShown, versionView, versionWanted } from './version-view';
 import { acquireLease, followProjectLease, leaseRefused, leaseSettled, leaseWritable } from './project-lease';
+import { adoptEdit } from '../state/edit-guard';
+import { collaborative } from '../persist/project-collaboration';
 
 export type { ProjectMeta } from '../persist/backend';
 export { newProject } from '../actions';
@@ -40,7 +42,8 @@ export type ProjectEvent =
   | { type: 'DRAFT'; id: string; durability: Exclude<DraftDurability, { state: 'none' }> }
   | { type: 'RECOVERED'; meta: ProjectMeta; draft: ProjectDraftMeta; failure: ProjectFailure; baseObjects: number }
   | { type: 'OPENED'; meta: ProjectMeta } | { type: 'MISSING'; id: string } | { type: 'DELETED' }
-  | { type: 'REBASE'; revision: number } | { type: 'REMOTE' } | { type: 'EMPTIED' } | { type: 'RESTORED'; revision: number } | { type: 'SAVE_AS_NEW' };
+  | { type: 'REBASE'; revision: number } | { type: 'REMOTE' } | { type: 'EMPTIED' } | { type: 'RESTORED'; revision: number } | { type: 'SAVE_AS_NEW' }
+  | { type: 'SYNC'; meta: ProjectMeta };
 let recoveryCore: typeof import('./project-recovery');
 const projectFailure = (...args: Parameters<typeof recoveryCore.projectFailure>) => recoveryCore.projectFailure(...args);
 const conflictFailure = (...args: Parameters<typeof recoveryCore.conflictFailure>) => recoveryCore.conflictFailure(...args);
@@ -72,6 +75,7 @@ const draftStorage = async () => (await import('../persist/drafts')).projectDraf
 const session = { owner: newKey() };
 let leaseFor: string | null = null;
 async function leaseForSave(): Promise<boolean> {
+  if (collaborative()) return true;
   const { id, revision } = project.get().context;
   if (revision <= 0 || !id) return true;
   leaseFor = id;
@@ -194,6 +198,8 @@ const recovered = [
   { target: 'failed', action: recoveredWith },
 ] as const;
 const leave = { ERROR: failed, DRAFT: draftUpdate, RECOVERED: recovered, BLANK: 'blank', OPEN: { target: 'opening', action: () => ({ loaded: null }) }, DELETED: 'deleted',
+  SYNC: { guard: (c: ProjectContext, e: { meta: ProjectMeta }) => c.id === e.meta.id,
+    action: (_: ProjectContext, e: { meta: ProjectMeta }) => ({ revision: e.meta.revision ?? 0, name: e.meta.name, savedAt: e.meta.savedAt, loaded: { revision: e.meta.revision ?? 0, objects: e.meta.objects } }) },
   MISSING: { target: 'missing', action: (_: ProjectContext, e: { id: string }) => ({ id: e.id, dirty: false, loaded: null }) },
   EMPTIED: { action: () => ({ allowEmpty: true }) } } as const;
 const writable = (c: ProjectContext) => !blocksAutosave(c.failure) && leaseWritable();
@@ -264,11 +270,12 @@ function refreshList() {
 }
 function adopt(f: () => void) {
   adopting = true;
-  try { f(); } finally { adopting = false; leaving = false; }
+  try { adoptEdit(f); } finally { adopting = false; leaving = false; }
   generation = documentGeneration();
   observed = snapshot();
 }
 export const openingStep = (f: () => void) => project.get().value === 'saved' ? adopt(f) : f();
+export const adoptShared = adopt;
 
 const sender = newKey();
 let channel: BroadcastChannel | null = null;
@@ -287,6 +294,7 @@ function remote(message: { type?: string; id?: string; sender?: string }) {
       project.send({ type: 'ERROR', error: failure.message, failure }); checkpointProject();
     } else { project.send({ type: 'MISSING', id: message.id }); notFound(); writeRoute('/', true); void route(); }
   } else if (message.type === 'saved') {
+    if (collaborative()) return;
     project.send({ type: 'REMOTE' }); checkpointProject();
   }
 }
@@ -419,7 +427,7 @@ async function start(ready: Promise<unknown>) {
     if (value === 'editing' || value === 'saving') leaseFor = context.id;
     return leaseFor === context.id ? context.id : null;
   };
-  followProjectLease(leased, (f) => project.subscribe(f),
+  if (!collaborative()) followProjectLease(leased, (f) => project.subscribe(f),
     (from, id) => from === 'viewing' && !hasUnsavedProject() ? void openProject(id, { reload: true }) : project.send({ type: 'FLUSH' }));
   refreshList(); void refreshProjectDrafts();
   const unsaved: unknown = currentRoute().kind === 'blank' ? history.state?.[UNSAVED] : null;
@@ -428,6 +436,7 @@ async function start(ready: Promise<unknown>) {
     project.send({ type: 'EDIT' }); writeProjectRoute(true);
   } else if (!(typeof unsaved === 'string' && await resumeUnsaved(unsaved)) && !(currentRoute().kind === 'blank' && await resumeOrphaned())) await route();
   if (!store) project.send({ type: 'ERROR', error: projectStorageError() });
+  if (collaborative()) (await import('./collaboration')).startCollaboration();
   (await import('./boot')).startFlows();
 }
 
@@ -500,6 +509,10 @@ async function resumeOrphaned() {
 export const leaveProjectVersion = (id: string) => openProject(id, { reload: true });
 export async function restoreProjectVersion() {
   if (!versionShown()) return;
+  if (collaborative()) {
+    const meta = await (await import('./collaboration')).prepareSharedReplacement();
+    project.send({ type: 'SYNC', meta });
+  }
   versionView.send({ type: 'RESTORE' });
   observed = snapshot();
   checkpointProject(observed);

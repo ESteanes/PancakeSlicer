@@ -35,6 +35,8 @@ const migrationDraftLifecycle = "draft-lifecycle"
 
 const migrationSnapshotMixes = "snapshot-mixes-by-id"
 
+const migrationReceiptRecords = "operation-receipts-without-record"
+
 func migrateWorkspace(d *workspaceData, now time.Time, root string) ([]string, error) {
 	var ran []string
 	mark := func(id string) {
@@ -122,7 +124,22 @@ func migrateWorkspace(d *workspaceData, now time.Time, root string) ([]string, e
 		retireUnreachableDrafts(d)
 		mark(migrationDraftLifecycle)
 	}
+	if _, done := d.Migrations[migrationReceiptRecords]; !done {
+		dropReceiptRecords(d)
+		mark(migrationReceiptRecords)
+	}
 	return ran, nil
+}
+
+func dropReceiptRecords(d *workspaceData) {
+	for id, receipt := range d.Operations {
+		var response map[string]json.RawMessage
+		if json.Unmarshal(receipt.Response, &response) == nil && len(response) == 3 && response["operationId"] != nil && response["revision"] != nil && response["record"] != nil {
+			delete(response, "record")
+			receipt.Response = jsonValue(response)
+			d.Operations[id] = receipt
+		}
+	}
 }
 
 func retireUnreachableDrafts(d *workspaceData) {

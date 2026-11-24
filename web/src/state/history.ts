@@ -1,12 +1,13 @@
 import { captureProjectProfiles } from '../profiles/project';
 import type * as THREE from 'three';
 import { plateSignature } from '../slice-input';
-import { getState, setState, type PlateObject, type State } from './store';
+import { getState, setState, toast, type PlateObject, type State } from './store';
+import { splitShared, sharedChanges, applyShared, joinShared, equalResource, historyChange, type ResourceChange } from '../persist/shared-document';
 
 const DOC_KEYS = [
   'objects', 'projectPlates', 'plateIndex', 'project', 'projectName', 'projectMaterials', 'projectPresets', 'projectSlotValues', 'projectSlots',
   'events', 'printer', 'process', 'dirty', 'filamentEdits', 'selected',
-  'wipeTowerPos', 'processVariant', 'profileSnapshots', 'projectProfileContexts',
+  'wipeTowerPos', 'processVariant', 'profileSnapshots', 'projectProfileContexts', 'collaborationOrder',
 ] as const satisfies readonly (keyof State)[];
 export type Doc = Pick<State, (typeof DOC_KEYS)[number]>;
 
@@ -86,7 +87,6 @@ function commit(name: string, before: Doc, merge?: string) {
     top.after = after;
     top.at = now;
   } else {
-    if (top && !sameDoc(top.after, before)) top.after = before;
     undoStack.push({ name, before, after, merge, at: now });
   }
   redoStack = [];
@@ -141,21 +141,42 @@ function restore(doc: Doc) {
 
 export function undo() {
   if (open || !undoStack.length) return;
-  const st = undoStack.pop()!;
-  const now = snapshot();
-  if (!sameDoc(st.after, now)) st.after = now;
-  restore(st.before);
+  const st = undoStack.at(-1)!;
+  if (!restoreChanges(st.after, st.before)) return;
+  undoStack.pop();
   redoStack.push(st);
   notify();
 }
 
 export function redo() {
   if (open || !redoStack.length) return;
-  const st = redoStack.pop()!;
-  restore(st.after);
+  const st = redoStack.at(-1)!;
+  if (!restoreChanges(st.before, st.after)) return;
+  redoStack.pop();
   undoStack.push(st);
   notify();
 }
+
+function restoreChanges(from: Doc, to: Doc): boolean {
+  if (import.meta.env.MODE === 'demo') { restore(to); return true; }
+  const change = historyChange(from, to, snapshot());
+  if (!change) {
+    toast('shared_undo_blocked');
+    return false;
+  }
+  restore(change.doc as unknown as Doc);
+  const result = splitShared(snapshot(), splitShared(change.doc));
+  return getState().plateIndex === change.doc.plateIndex && change.changes.every(c => equalResource(result[c.key] ?? null, c.after));
+}
+
+export function receiveHistoryChanges(changes: ResourceChange[]) {
+  if (!open) return;
+  const base = splitShared(open.before);
+  const own = new Set(sharedChanges(base, splitShared(snapshot(), base)).map(change => change.key));
+  open.before = joinShared(applyShared(base, changes.filter(change => !own.has(change.key))), open.before) as unknown as Doc;
+}
+
+export const historyEditing = () => open !== null;
 
 export function undoSteps(n: number) { for (let i = 0; i < n; i++) undo(); }
 export function redoSteps(n: number) { for (let i = 0; i < n; i++) redo(); }

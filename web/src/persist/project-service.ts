@@ -2,9 +2,12 @@ import { newKey, type ProjectMeta, type ProjectStore, type StoredDocBase, type P
 import { jsonWrite, putAsset, readAsset, routeKey } from './service';
 import type { NoticeOwner } from '../api/access';
 import { captureProjectWire, prepareOnce, projectJson as serviceJson, projectWrite } from './project-wire';
+import { acquireResources, collaborative, heldTokens, localBase, readShared, releaseResources, rememberShared, rememberLocal, saveShared } from './project-collaboration';
+import { sharedChanges, splitShared } from './shared-document';
 interface ProjectRecord { meta: ProjectMeta; doc: StoredDocBase; jobReferences?: unknown }
 const projectPath = (id: string) => `/api/projects/${routeKey(id)}`;
 const pendingSaves = new Map<string, Promise<{ request: RequestInit; savedAt: number }>>();
+const pendingCreations = new Map<string, Promise<{ request: RequestInit; record: ProjectRecord; initialized: boolean }>>();
 async function required<T>(path: string, init?: RequestInit, owner?: NoticeOwner): Promise<T> {
   const value = await serviceJson<T>(path, init, false, owner);
   if (value === null) throw new Error('Oops! The server didn\'t return any data for this project.');
@@ -20,7 +23,7 @@ const metadata = async (id: string, archived = false) => {
 };
 type Command = { id: string; kind: ProjectCommandStatus['kind']; name?: string; newId?: string; expectedRevision?: number };
 interface PendingCommand {
-  command: Readonly<Command>; status: ProjectCommandStatus; request: RequestInit | null;
+  command: Readonly<Command>; status: ProjectCommandStatus; request: RequestInit | null; sent: boolean;
   running: Promise<ProjectCommandAck | ProjectMeta> | null; result: ProjectCommandAck | ProjectMeta | null;
 }
 const commands = new Map<string, PendingCommand>(), commandListeners = new Set<() => void>();
@@ -54,8 +57,31 @@ function executeCommand(entry: PendingCommand): Promise<ProjectCommandAck | Proj
         ...(name !== undefined ? { name } : {}), ...(newId !== undefined ? { newId } : {}) }));
     }
     entry.status.state = 'sending'; entry.status.error = null; publishCommands();
-    const ack = await required<ProjectCommandAck | ProjectMeta>(projectPath(entry.command.id) + '/' + entry.command.kind, entry.request)
-      .catch((error: unknown) => alreadyRestored(entry, error));
+    const { id, kind } = entry.command;
+    let acquired: string[] = [];
+    let ack: ProjectCommandAck | ProjectMeta | undefined;
+    try {
+      const send = () => {
+        entry.sent = true;
+        return required<ProjectCommandAck | ProjectMeta>(projectPath(id) + '/' + kind, entry.request!)
+          .catch((error: unknown) => alreadyRestored(entry, error));
+      };
+      if (entry.sent) {
+        try { ack = await send(); }
+        catch (error) { if ((error as { code?: string }).code !== 'edit_lock_required') throw error; }
+      }
+      if (!ack && collaborative() && kind !== 'duplicate') {
+        const record = await required<ProjectRecord>(projectPath(id) + (kind === 'restore' ? '?archived=1' : ''));
+        const keys = kind === 'archive' ? Object.keys(splitShared(record.doc)) : ['settings'];
+        const before = heldTokens(id);
+        await acquireResources(id, keys);
+        acquired = keys.filter(key => !before[key]);
+        entry.request = { ...entry.request, headers: { ...entry.request.headers, 'X-Orca-Edit-Locks': JSON.stringify(heldTokens(id)) } };
+      }
+      ack ??= await send();
+    } finally {
+      if (acquired.length) await releaseResources(id, acquired).catch(() => {});
+    }
     if (entry.command.kind === 'duplicate') {
       if (!('id' in ack) || ack.id !== entry.command.newId || ack.revision !== 1) throw new Error('Oops! The server returned an unexpected response while duplicating the project.');
     } else if (!('operationId' in ack) || ack.operationId !== entry.status.operationId || ack.revision !== entry.status.expectedRevision! + 1)
@@ -76,7 +102,7 @@ async function projectCommand(command: Command) {
   const key = JSON.stringify(command);
   let entry = commands.get(key);
   if (!entry) {
-    entry = { command: Object.freeze({ ...command }), request: null, running: null, result: null,
+    entry = { command: Object.freeze({ ...command }), request: null, sent: false, running: null, result: null,
       status: { ...command, operationId: newKey(), expectedRevision: command.expectedRevision ?? null, state: 'preparing', error: null } };
     commands.set(key, entry); publishCommands();
   }
@@ -87,8 +113,50 @@ async function projectCommand(command: Command) {
 export const serviceStore: ProjectStore = {
   kind: 'service',
   list: () => required<ProjectMeta[]>('/api/projects'),
-  load: (id) => serviceJson<ProjectRecord>(projectPath(id), undefined, true),
+  load: async (id) => {
+    const record = await serviceJson<ProjectRecord>(projectPath(id), undefined, true);
+    if (record && collaborative()) rememberShared(record, true);
+    return record;
+  },
   async save(id, meta, doc, thumbnail) {
+    if (collaborative()) {
+      const metadata = { thumbnail, change: meta.change };
+      if ((meta.revision ?? 0) > 0 && !pendingCreations.has(id)) return saveShared(id, doc, metadata);
+      const preparation = prepareOnce(pendingCreations, id, async () => {
+        const record = { meta: { ...meta, id, revision: 1, thumbnail: thumbnail ?? null }, doc };
+        const capture = await captureProjectWire({ doc, name: meta.name, objects: meta.objects });
+        try {
+          const request = projectWrite(await capture.project({ operationId: newKey(), expectedRevision: 0, record: { ...record, doc: null } }));
+          return { request: { ...request, headers: { ...request.headers, 'X-Orca-Collaboration': '1' } }, record, initialized: false };
+        } finally { capture.release(); }
+      });
+      const creation = await preparation;
+      if (!creation.initialized) {
+        const ack = await required<{ revision: number }>(projectPath(id), creation.request);
+        if (ack.revision !== 1) throw new Error('Oops! Couldn\'t verify the saved project version.');
+        rememberShared(creation.record); rememberLocal(id, creation.record.doc);
+        creation.initialized = true;
+      }
+      const base = localBase(id)!;
+      const keys = sharedChanges(base, splitShared(doc, base)).filter(change => change.before !== null).map(change => change.key);
+      const before = heldTokens(id);
+      let acquired: string[] = [];
+      try {
+        if (keys.length) {
+          await acquireResources(id, keys);
+          acquired = keys.filter(key => !before[key]);
+        }
+        const saved = await saveShared(id, doc, metadata);
+        const record = await readShared(id);
+        if (record.meta.id !== id || !Number.isSafeInteger(record.meta.revision) || record.meta.revision! < saved.revision)
+          throw new Error('Could not verify the shared project save.');
+        rememberShared(record);
+        if (pendingCreations.get(id) === preparation) pendingCreations.delete(id);
+        return { revision: record.meta.revision!, savedAt: record.meta.savedAt, record };
+      } finally {
+        if (acquired.length) await releaseResources(id, acquired).catch(() => {});
+      }
+    }
     const capture = await captureProjectWire({ doc, name: meta.name, objects: meta.objects });
     let revision = meta.revision ?? 0;
     for (const [prior, preparation] of [...pendingSaves]) {

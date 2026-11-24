@@ -206,8 +206,9 @@ func withVersion(p workspaceProject, revision uint64, sha string, record json.Ra
 	}
 	json.Unmarshal(record, &meta)
 	content := recordContent(record)
-	if last := lastVersion(x); last != nil && (last.Record == sha || content != "" && last.Content == content) && last.Name == meta.Meta.Name {
+	if last := lastVersion(x); last != nil && (!last.Sealed || last.Revision == revision) && (last.Record == sha || content != "" && last.Content == content) && last.Name == meta.Meta.Name {
 		last.Revision, last.Until, last.Record, last.Content = revision, now, sha, content
+		last.Change = mergeChanges(last.Change, change)
 	} else if last := lastVersion(x); last != nil && kind != "duplicate" && !last.Sealed && last.Slice == nil &&
 		now-last.Until < versionIdle.Milliseconds() && now-last.At < versionSpan.Milliseconds() {
 		last.Revision, last.Until, last.Record, last.Content, last.Name, last.Objects = revision, now, sha, content, meta.Meta.Name, meta.Meta.Objects
@@ -428,17 +429,35 @@ func (s *Server) versionRoutes(mux *http.ServeMux) {
 			return
 		}
 		project(w, r, func(d *workspaceData, id string) {
-			x := d.Projects[id].history()
+			p := d.Projects[id]
+			if p.Archived || p.Revision != in.Revision {
+				workspaceFailure(w, 409, "version_moved", "The project changed after this revision.", "reload", p.Revision)
+				return
+			}
+			x := p.history()
 			last := lastVersion(x)
+			changed := false
+			if last == nil || last.Revision < in.Revision {
+				sha, err := st.keepRecord(id, p.Record)
+				if err != nil {
+					workspaceFailure(w, 507, "versions_write_failed", "Uh-oh, couldn't save the version history ("+storageCause(err)+").", "retry_storage", p.Revision)
+					return
+				}
+				x = withVersion(p, p.Revision, sha, p.Record, nil, "save", time.Now().UnixMilli())
+				last, changed = lastVersion(x), true
+			}
 			if last == nil || last.Revision != in.Revision {
-				workspaceFailure(w, 409, "version_moved", "The project changed after this revision.", "reload", d.Projects[id].Revision)
+				workspaceFailure(w, 409, "version_moved", "The project changed after this revision.", "reload", p.Revision)
 				return
 			}
 			if !last.Sealed {
-				last.Sealed = true
+				last.Sealed, changed = true, true
+			}
+			if changed {
 				if !st.storeHistory(w, d, id, x) {
 					return
 				}
+				st.pruneVersionFiles(id, x)
 			}
 			writeJSON(w, 200, last)
 		})
@@ -485,6 +504,10 @@ func (s *Server) versionRoutes(mux *http.ServeMux) {
 			return
 		}
 		version(w, r, func(d *workspaceData, id string, x *versionIndex, v *projectVersion) {
+			if pinned := j.Request.ProjectSnapshot; pinned != nil && (pinned.ID != id || pinned.Version != v.ID || pinned.Revision != in.Revision) {
+				workspaceFailure(w, 409, "snapshot_mismatch", "This slice belongs to a different project version.", "open_version", 0)
+				return
+			}
 			if v.Revision != in.Revision {
 				workspaceFailure(w, 409, "version_moved", "Heads up — this version changed after the slice started.", "slice_again", 0)
 				return

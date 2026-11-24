@@ -5,7 +5,8 @@ import { plateSignature } from '../slice-input';
 import type { Doc } from '../state/history';
 import { getState, subscribeStore, toast, type JobView, type State } from '../state/store';
 import { slotColour } from '../profiles/filament-colour';
-import type { JobStatus } from '../api/types';
+import type { JobStatus, ProjectSnapshot } from '../api/types';
+import { selectSharedPlate } from '../persist/shared-document';
 import { project, flushProject, leaveProjectVersion, restoreProjectVersion, viewProjectVersion, type ProjectMeta } from '../flow/project';
 import { versionShown, versionView, versionWanted } from '../flow/version-view';
 import { changeParts, describeChange, profileName, type VersionChange } from './version-change';
@@ -75,8 +76,12 @@ export const toggleHistory = () => (state.open ? closeHistory() : openHistory())
 async function showSlice(id: string, v: ProjectVersion, request: number) {
   try {
     const status = await post<JobStatus & { id: string }>(`${path(id)}/${v.id}/open-slice`, {});
-    const job: JobView = { id: status.id, state: 'done', pct: 100, stage: 'done', status, plateSignature: plateSignature(getState()), warnings: [] };
-    versionView.send({ type: 'SLICE', request, job });
+    if (versionView.get().context.request !== request || versionView.get().value !== 'loading-slice') return;
+    const s = getState(), plateIndex = status.request?.project_snapshot?.plateIndex || status.request?.plate_index ||
+      (s.projectPlates.length < 2 ? s.plateIndex : 0);
+    const plate = selectSharedPlate(s, plateIndex);
+    const job: JobView = { id: status.id, state: 'done', pct: 100, stage: 'done', status, plateSignature: plateSignature(plate), warnings: [] };
+    versionView.send({ type: 'SLICE', request, job, plateIndex });
   } catch (e) {
     const current = versionView.get().context.request === request;
     versionView.send({ type: 'SLICE_FAIL', request });
@@ -123,18 +128,25 @@ export async function restoreVersion() {
   void refreshHistory(id);
 }
 
-async function sealCurrent(signature: string): Promise<{ id: string; revision: number; version: number } | null> {
+export async function sealCurrent(signature: string): Promise<ProjectSnapshot | null> {
   await flushProject();
   const { value, context } = project.get();
   if (state.viewing || value !== 'saved' || plateSignature(getState()) !== signature) return null;
+  const plateIndex = getState().plateIndex;
   const sealed = await post<ProjectVersion>(`${path(context.id)}/seal`, { revision: context.revision });
-  return { id: context.id, revision: context.revision, version: sealed.id };
+  return { id: context.id, revision: context.revision, version: sealed.id, plateIndex };
 }
 let sealing: { signature: string; done: ReturnType<typeof sealCurrent> } | null = null;
 const finishedJob = (job: JobView = getState().job) =>
-  job.state === 'done' && job.id && !job.stale && !job.calib && job.plateSignature && job.plateSignature === plateSignature(getState()) ? job : null;
+  job.state === 'done' && job.id && !job.calib && job.plateSignature && (job.projectSnapshot || !job.stale && job.plateSignature === plateSignature(getState())) ? job : null;
 async function attachSlice(job: JobView | null) {
   if (!job?.id || !job.plateSignature || state.viewing) return;
+  if (job.projectSnapshot) {
+    const target = job.projectSnapshot;
+    await post(`${path(target.id)}/${target.version}/slice`, { revision: target.revision, jobId: job.id });
+    if (state.open && state.projectId === target.id) void refreshHistory(target.id);
+    return;
+  }
   const seal = sealing?.signature === job.plateSignature ? await sealing.done.catch(() => null) : null;
   const target = seal && seal.revision === project.get().context.revision ? seal : await sealCurrent(job.plateSignature);
   if (!target || plateSignature(getState()) !== job.plateSignature) return;
@@ -150,7 +162,7 @@ export function startVersionTracking() {
   subscribeStore(() => {
     const job = getState().job;
     if (state.viewing || job.calib || !job.plateSignature) return;
-    if ((job.state === 'submitting' || job.state === 'running') && job.plateSignature !== started) {
+    if (!job.projectSnapshot && (job.state === 'submitting' || job.state === 'running') && job.plateSignature !== started) {
       started = job.plateSignature;
       const done = sealCurrent(started);
       done.catch(() => {});

@@ -77,6 +77,8 @@ type JobRequest struct {
 	Session string `json:"session,omitempty"`
 	SliceGroup string `json:"slice_group,omitempty"`
 	PreviewBudget float64 `json:"preview_budget,omitempty"`
+
+	ProjectSnapshot *projectSnapshotRef `json:"project_snapshot,omitempty"`
 }
 
 type Event struct {

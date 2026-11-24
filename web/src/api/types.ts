@@ -6,7 +6,10 @@ export type Config = Record<string, ConfigValue>;
 
 export type JobState = 'queued' | 'running' | 'done' | 'failed' | 'canceled';
 
+export interface ProjectSnapshot { id: string; revision: number; version: number; plateIndex: number }
+
 export interface JobStatus {
+  request?: { project_snapshot?: ProjectSnapshot; plate_index?: number };
   id: string;
   state: JobState;
   progress?: number;
@@ -47,6 +50,7 @@ export interface JobLibrary { printer: string; filaments: string[]; slots: strin
   usedSlots?: number[] }
 export interface ProjectValues { machine?: Config; process?: Config; filaments?: Config[] }
 export interface JobRequest {
+  projectSnapshot?: ProjectSnapshot;
   library: JobLibrary;
   files: { name: string; blob: Blob }[];
   project: ProjectValues;
